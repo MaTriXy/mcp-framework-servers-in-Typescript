@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.18](https://github.com/QuantGeekDev/mcp-framework/compare/mcp-framework-v0.2.17...mcp-framework-v0.2.18) (2026-02-05)
+
+
+### Bug Fixes
+
+* **http-stream:** prevent session destruction on transient errors ([b0ff78b](https://github.com/QuantGeekDev/mcp-framework/commit/b0ff78bc6e6e66d7be1d7b6f73bca41ba1302852))
+* **http-stream:** prevent session destruction on transient errors ([7f1b460](https://github.com/QuantGeekDev/mcp-framework/commit/7f1b460f73029dd51ef98809e6ce6c68d0830dd7))
+
 ## [0.2.17](https://github.com/QuantGeekDev/mcp-framework/compare/mcp-framework-v0.2.16...mcp-framework-v0.2.17) (2025-11-21)
 
 
