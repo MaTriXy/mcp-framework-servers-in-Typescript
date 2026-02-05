@@ -135,14 +135,22 @@ export class HttpStreamTransport extends AbstractTransport {
       authData = (authResult as AuthResult).data as RequestContextData || {};
     }
 
+    // Allow re-initialization even when a stale session ID is provided.
+    // Clients like Cline may keep sending the old session ID header after
+    // a session is lost (server restart, transport error, etc.).
+    const isReInitialize = sessionId && !this._transports[sessionId] && body && isInitializeRequest(body);
+
     // Handle different request scenarios
     if (sessionId && this._transports[sessionId]) {
       // Existing session
       transport = this._transports[sessionId];
       logger.debug(`Reusing existing session: ${sessionId}`);
-    } else if (isInitialize) {
-      // New session initialization
-      logger.info('Creating new session for initialization request');
+    } else if (isInitialize || isReInitialize) {
+      if (isReInitialize) {
+        logger.info(`Stale session ID ${sessionId} — creating new session for re-initialization`);
+      } else {
+        logger.info('Creating new session for initialization request');
+      }
 
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
@@ -161,10 +169,11 @@ export class HttpStreamTransport extends AbstractTransport {
       };
 
       transport.onerror = (error) => {
-        logger.error(`Transport error for session: ${error}`);
-        if (transport.sessionId) {
-          delete this._transports[transport.sessionId];
-        }
+        // Log the error but do NOT remove the session. The SDK fires onerror
+        // for transient issues (parse errors, failed SSE writes) that don't
+        // invalidate the session. Removing the session here causes "Session
+        // not found" errors on subsequent requests from the same client.
+        logger.error(`Transport error for session ${transport.sessionId}: ${error}`);
       };
 
       transport.onmessage = async (message: JSONRPCMessage) => {
@@ -182,7 +191,7 @@ export class HttpStreamTransport extends AbstractTransport {
       this.sendError(res, 400, -32000, 'Bad Request: No valid session ID provided');
       return;
     } else {
-      // Session ID provided but not found
+      // Session ID provided but not found (and not an initialize request)
       this.sendError(res, 404, -32001, 'Session not found');
       return;
     }
@@ -268,8 +277,11 @@ export class HttpStreamTransport extends AbstractTransport {
     }
 
     if (failedSessions.length > 0) {
-      failedSessions.forEach((sessionId) => delete this._transports[sessionId]);
-      logger.warn(`Failed to send message to ${failedSessions.length} sessions.`);
+      // Log but don't remove sessions on transient send failures.
+      // The SDK throws when no SSE stream is currently open for a request ID,
+      // which is a normal condition (e.g. client momentarily between requests).
+      // The session itself remains valid for future requests.
+      logger.warn(`Failed to broadcast to ${failedSessions.length} session(s) — sessions preserved for future requests.`);
     }
   }
 
