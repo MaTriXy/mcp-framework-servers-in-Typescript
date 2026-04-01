@@ -334,12 +334,10 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
   /**
    * Injects the server into this tool to allow sampling requests.
    * Automatically called by the MCP server when registering the tool.
-   * Subsequent calls are silently ignored.
+   * In multi-transport mode, the server reference is updated per-invocation
+   * so that progress/sampling/roots route through the correct transport.
    */
   public injectServer(server: Server): void {
-    if (this.server) {
-      return;
-    }
     this.server = server;
   }
 

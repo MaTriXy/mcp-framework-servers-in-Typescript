@@ -71,11 +71,21 @@ export interface MCPServerConfig {
   version?: string;
   basePath?: string;
   transport?: TransportConfig;
+  /** Array of transport configs for running multiple transports concurrently.
+   *  Cannot be used together with `transport`. */
+  transports?: TransportConfig[];
   logging?: boolean;
   tasks?: TasksConfig;
   /** When true, app HTML content is re-read from disk on every resources/read.
    *  Defaults to true when MCP_DEV_MODE env var is set. */
   devMode?: boolean;
+}
+
+export interface TransportBinding {
+  config: TransportConfig;
+  transport: BaseTransport;
+  sdkServer: Server;
+  label: string;
 }
 
 export type ServerCapabilities = {
@@ -103,7 +113,6 @@ export type ServerCapabilities = {
 };
 
 export class MCPServer {
-  private server!: Server;
   private toolsMap: Map<string, ToolProtocol> = new Map();
   private promptsMap: Map<string, PromptProtocol> = new Map();
   private resourcesMap: Map<string, ResourceProtocol> = new Map();
@@ -117,10 +126,10 @@ export class MCPServer {
   private serverName: string;
   private serverVersion: string;
   private basePath: string;
-  private transportConfig: TransportConfig;
+  private transportConfigs: TransportConfig[];
   private capabilities: ServerCapabilities = {};
   private isRunning: boolean = false;
-  private transport?: BaseTransport;
+  private bindings: TransportBinding[] = [];
   private shutdownPromise?: Promise<void>;
   private shutdownResolve?: () => void;
   private _logLevel: MCPLogLevel = 'warning';
@@ -131,29 +140,76 @@ export class MCPServer {
   private _taskManager?: TaskManager;
   private _devMode: boolean;
 
+  /** Returns the first binding's SDK Server, or undefined if no bindings exist. */
+  private get server(): Server | undefined {
+    return this.bindings[0]?.sdkServer;
+  }
+
   constructor(config: MCPServerConfig = {}) {
     this.basePath = this.resolveBasePath(config.basePath);
     this.serverName = config.name ?? this.getDefaultName();
     this.serverVersion = config.version ?? this.getDefaultVersion();
-    this.transportConfig = config.transport ?? { type: 'stdio' };
     this._loggingEnabled = config.logging ?? false;
     this._tasksConfig = config.tasks;
     this._devMode = config.devMode ?? !!process.env.MCP_DEV_MODE;
 
-    if (this.transportConfig.auth && this.transportConfig.options) {
-      (this.transportConfig.options as any).auth = this.transportConfig.auth;
-    } else if (this.transportConfig.auth && !this.transportConfig.options) {
-      this.transportConfig.options = { auth: this.transportConfig.auth } as any;
+    // Normalize transport config: support both singular and plural forms
+    if (config.transport && config.transports) {
+      throw new Error(
+        'Cannot specify both `transport` and `transports` in MCPServerConfig. ' +
+        'Use `transport` for a single transport or `transports` for multiple.',
+      );
+    }
+    this.transportConfigs = config.transports
+      ?? (config.transport ? [config.transport] : [{ type: 'stdio' as TransportType }]);
+
+    this.validateTransportConfigs();
+
+    // Apply auth injection per transport config
+    for (const tc of this.transportConfigs) {
+      if (tc.auth && tc.options) {
+        (tc.options as any).auth = tc.auth;
+      } else if (tc.auth && !tc.options) {
+        tc.options = { auth: tc.auth } as any;
+      }
     }
 
     logger.info(`Initializing MCP Server: ${this.serverName}@${this.serverVersion}`);
     logger.debug(`Base path: ${this.basePath}`);
-    logger.debug(`Transport config: ${JSON.stringify(this.transportConfig)}`);
+    logger.debug(`Transport configs: ${JSON.stringify(this.transportConfigs)}`);
 
     this.toolLoader = new ToolLoader(this.basePath);
     this.promptLoader = new PromptLoader(this.basePath);
     this.resourceLoader = new ResourceLoader(this.basePath);
     this.appLoader = new AppLoader(this.basePath);
+  }
+
+  private validateTransportConfigs(): void {
+    // Enforce at most one stdio transport
+    const stdioCount = this.transportConfigs.filter(c => c.type === 'stdio').length;
+    if (stdioCount > 1) {
+      throw new Error(
+        'Only one stdio transport is allowed (stdin/stdout is a process-level singleton).',
+      );
+    }
+
+    // Detect port conflicts among HTTP-based transports
+    const portMap = new Map<number, string>();
+    for (const tc of this.transportConfigs) {
+      if (tc.type === 'stdio') continue;
+
+      const port = (tc.options as any)?.port
+        ?? (tc.type === 'sse' ? DEFAULT_SSE_CONFIG.port : DEFAULT_HTTP_STREAM_CONFIG.port);
+
+      const existing = portMap.get(port);
+      if (existing) {
+        throw new Error(
+          `Port conflict: both ${existing} and ${tc.type} are configured on port ${port}. ` +
+          'Use different ports for each HTTP-based transport.',
+        );
+      }
+      portMap.set(port, tc.type);
+    }
   }
 
   private resolveBasePath(configPath?: string): string {
@@ -195,14 +251,14 @@ export class MCPServer {
     return process.cwd();
   }
 
-  private createTransport(): BaseTransport {
-    logger.debug(`Creating transport: ${this.transportConfig.type}`);
+  private createTransportFromConfig(config: TransportConfig): BaseTransport {
+    logger.debug(`Creating transport: ${config.type}`);
 
     let transport: BaseTransport;
-    const options = this.transportConfig.options || {};
-    const authConfig = this.transportConfig.auth ?? (options as any).auth;
+    const options = config.options || {};
+    const authConfig = config.auth ?? (options as any).auth;
 
-    switch (this.transportConfig.type) {
+    switch (config.type) {
       case 'sse': {
         const sseConfig: SSETransportConfig = {
           ...DEFAULT_SSE_CONFIG,
@@ -230,27 +286,24 @@ export class MCPServer {
       }
       case 'stdio':
       default:
-        if (this.transportConfig.type !== 'stdio') {
-          logger.warn(`Unsupported type '${this.transportConfig.type}', defaulting to stdio.`);
+        if (config.type !== 'stdio') {
+          logger.warn(`Unsupported type '${config.type}', defaulting to stdio.`);
         }
         transport = new StdioServerTransport();
         break;
     }
 
-    transport.onclose = () => {
-      logger.info(`Transport (${transport.type}) closed.`);
-      if (this.isRunning) {
-        this.stop().catch((error) => {
-          logger.error(`Shutdown error after transport close: ${error}`);
-          process.exit(1);
-        });
-      }
-    };
-
     transport.onerror = (error: Error) => {
       logger.error(`Transport (${transport.type}) error: ${error.message}\n${error.stack}`);
     };
     return transport;
+  }
+
+  private makeBindingLabel(config: TransportConfig): string {
+    if (config.type === 'stdio') return 'stdio';
+    const port = (config.options as any)?.port
+      ?? (config.type === 'sse' ? DEFAULT_SSE_CONFIG.port : DEFAULT_HTTP_STREAM_CONFIG.port);
+    return `${config.type}:${port}`;
   }
 
   private readPackageJson(): any {
@@ -290,8 +343,8 @@ export class MCPServer {
     return '0.0.0';
   }
 
-  private setupHandlers(server?: Server) {
-    const targetServer = server || this.server;
+  private setupHandlers(server: Server) {
+    const targetServer = server;
 
     targetServer.setRequestHandler(ListToolsRequestSchema, async (request: any) => {
       logger.debug(`Received ListTools request: ${JSON.stringify(request)}`);
@@ -327,6 +380,10 @@ export class MCPServer {
         logger.error(errorMsg);
         throw new Error(errorMsg);
       }
+
+      // Inject the target server so progress/sampling routes through the
+      // correct transport in multi-transport mode.
+      tool.injectServer(targetServer);
 
       // Check for task-augmented request
       const taskParams = request.params?.task;
@@ -963,35 +1020,69 @@ export class MCPServer {
       if (this._hasApps) {
         serverOptions.extensions = { [MCP_APP_EXTENSION_ID]: {} };
       }
-      this.server = new Server(
-        { name: this.serverName, version: this.serverVersion },
-        serverOptions as any,
-      );
-      tools.forEach((tool) => tool.injectServer(this.server));
+
+      // Create one binding per transport config
+      for (const tc of this.transportConfigs) {
+        const sdkServer = new Server(
+          { name: this.serverName, version: this.serverVersion },
+          serverOptions as any,
+        );
+        this.setupHandlers(sdkServer);
+        const transport = this.createTransportFromConfig(tc);
+        const label = this.makeBindingLabel(tc);
+
+        // When a transport closes at runtime, remove its binding.
+        // If all bindings are gone, shut down the server.
+        transport.onclose = () => {
+          logger.info(`Transport [${label}] closed.`);
+          this.bindings = this.bindings.filter(b => b.transport !== transport);
+          if (this.bindings.length === 0 && this.isRunning) {
+            this.stop().catch((error) => {
+              logger.error(`Shutdown error after last transport close: ${error}`);
+              process.exit(1);
+            });
+          }
+        };
+
+        this.bindings.push({ config: tc, transport, sdkServer, label });
+      }
+
+      // Inject first binding's server into tools for progress/sampling
+      if (this.bindings.length > 0) {
+        for (const tool of this.toolsMap.values()) {
+          tool.injectServer(this.bindings[0].sdkServer);
+        }
+      }
+
       logger.debug(
-        `SDK Server instance created with capabilities: ${JSON.stringify(this.capabilities)}`
+        `Created ${this.bindings.length} transport binding(s): ${this.bindings.map(b => b.label).join(', ')}`
       );
 
-      this.setupHandlers();
+      // Connect all transports concurrently
+      await Promise.all(
+        this.bindings.map(async (b) => {
+          logger.info(`Connecting transport [${b.label}] to SDK Server...`);
+          await b.sdkServer.connect(b.transport);
+        }),
+      );
 
-      this.transport = this.createTransport();
-
-      logger.info(`Connecting transport (${this.transport.type}) to SDK Server...`);
-      await this.server.connect(this.transport);
-
+      const transportLabels = this.bindings.map(b => b.label).join(', ');
       logger.info(
-        `Started ${this.serverName}@${this.serverVersion} successfully on transport ${this.transport.type}`
+        `Started ${this.serverName}@${this.serverVersion} on transport(s): ${transportLabels}`
       );
 
-      logger.info(`Tools (${tools.length}): ${tools.map((t) => t.name).join(', ') || 'None'}`);
+      const toolNames = Array.from(this.toolsMap.keys());
+      logger.info(`Tools (${toolNames.length}): ${toolNames.join(', ') || 'None'}`);
       if (this.capabilities.prompts) {
+        const promptNames = Array.from(this.promptsMap.keys());
         logger.info(
-          `Prompts (${prompts.length}): ${prompts.map((p) => p.name).join(', ') || 'None'}`
+          `Prompts (${promptNames.length}): ${promptNames.join(', ') || 'None'}`
         );
       }
       if (this.capabilities.resources) {
+        const resourceUris = Array.from(this.resourcesMap.keys());
         logger.info(
-          `Resources (${resources.length}): ${resources.map((r) => r.uri).join(', ') || 'None'}`
+          `Resources (${resourceUris.length}): ${resourceUris.join(', ') || 'None'}`
         );
       }
       if (this._hasApps) {
@@ -1036,31 +1127,30 @@ export class MCPServer {
     try {
       logger.info('Stopping server...');
 
-      let transportError: Error | null = null;
-      let sdkServerError: Error | null = null;
+      const errors: Error[] = [];
 
-      if (this.transport) {
-        try {
-          logger.debug(`Closing transport (${this.transport.type})...`);
-          await this.transport.close();
-          logger.info(`Transport closed.`);
-        } catch (e: any) {
-          transportError = e;
-          logger.error(`Error closing transport: ${e.message}`);
-        }
-        this.transport = undefined;
-      }
-
-      if (this.server) {
-        try {
-          logger.debug('Closing SDK Server...');
-          await this.server.close();
-          logger.info('SDK Server closed.');
-        } catch (e: any) {
-          sdkServerError = e;
-          logger.error(`Error closing SDK Server: ${e.message}`);
-        }
-      }
+      // Close all bindings concurrently
+      await Promise.allSettled(
+        this.bindings.map(async (b) => {
+          try {
+            logger.debug(`Closing transport [${b.label}]...`);
+            await b.transport.close();
+            logger.info(`Transport [${b.label}] closed.`);
+          } catch (e: any) {
+            errors.push(new Error(`Transport [${b.label}]: ${e.message}`));
+            logger.error(`Error closing transport [${b.label}]: ${e.message}`);
+          }
+          try {
+            logger.debug(`Closing SDK Server [${b.label}]...`);
+            await b.sdkServer.close();
+            logger.info(`SDK Server [${b.label}] closed.`);
+          } catch (e: any) {
+            errors.push(new Error(`SDK Server [${b.label}]: ${e.message}`));
+            logger.error(`Error closing SDK Server [${b.label}]: ${e.message}`);
+          }
+        }),
+      );
+      this.bindings = [];
 
       this.isRunning = false;
 
@@ -1071,10 +1161,10 @@ export class MCPServer {
         logger.warn('Shutdown resolve function not found.');
       }
 
-      if (transportError || sdkServerError) {
+      if (errors.length > 0) {
         logger.error('Errors occurred during server stop.');
         throw new Error(
-          `Server stop failed. TransportError: ${transportError?.message}, SDKServerError: ${sdkServerError?.message}`
+          `Server stop failed: ${errors.map(e => e.message).join('; ')}`
         );
       }
 
@@ -1112,22 +1202,26 @@ export class MCPServer {
   }
 
   /**
-   * Send a logging message to the client via the MCP logging protocol.
+   * Send a logging message to all connected clients via the MCP logging protocol.
    * Messages below the current log level threshold will be silently dropped.
+   * In multi-transport mode, the message is broadcast to all bindings.
    */
   public async sendLog(level: MCPLogLevel, loggerName: string, data: unknown): Promise<void> {
-    if (!this._loggingEnabled || !this.server) return;
+    if (!this._loggingEnabled || this.bindings.length === 0) return;
     if (LOG_LEVEL_SEVERITY[level] < LOG_LEVEL_SEVERITY[this._logLevel]) return;
 
-    try {
-      await this.server.sendLoggingMessage({
-        level,
-        logger: loggerName,
-        data,
-      });
-    } catch (error) {
-      // Don't throw on logging failures
-      logger.debug(`Failed to send log message: ${error}`);
-    }
+    await Promise.allSettled(
+      this.bindings.map(async (b) => {
+        try {
+          await b.sdkServer.sendLoggingMessage({
+            level,
+            logger: loggerName,
+            data,
+          });
+        } catch (error) {
+          logger.debug(`Failed to send log message via [${b.label}]: ${error}`);
+        }
+      }),
+    );
   }
 }
