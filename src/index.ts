@@ -37,3 +37,20 @@ export type { RequestContextData } from './utils/requestContext.js';
 // Transport utilities
 export { validateOrigin, getValidatedCorsOrigin } from './transports/utils/origin-validator.js';
 export type { OriginValidationConfig } from './transports/utils/origin-validator.js';
+
+// Serverless / Lambda
+export type {
+  APIGatewayV1Event,
+  APIGatewayV2Event,
+  LambdaEvent,
+  LambdaResult,
+  LambdaContext,
+  LambdaHandlerConfig,
+} from './serverless/types.js';
+export {
+  lambdaEventToRequest,
+  responseToLambdaResult,
+  isV2Event,
+  getSourceIp,
+} from './serverless/lambda-adapter.js';
+export type { HandleRequestOptions } from './core/MCPServer.js';
