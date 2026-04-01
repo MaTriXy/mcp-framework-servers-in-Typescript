@@ -7,8 +7,8 @@ export class ResourceLoader extends BaseLoader<ResourceProtocol> {
     super(
       {
         subdirectory: 'resources',
-        excludedFiles: ['BaseResource.js', '*.test.js', '*.spec.js'],
-        extensions: ['.js'],
+        excludedFiles: ['BaseResource.js', 'BaseResource.ts', '*.test.js', '*.spec.js', '*.test.ts', '*.spec.ts', '*.d.ts'],
+        extensions: ['.js', '.ts'],
       },
       basePath
     );
