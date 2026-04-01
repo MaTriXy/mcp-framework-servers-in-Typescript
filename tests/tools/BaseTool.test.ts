@@ -503,6 +503,250 @@ describe('BaseTool', () => {
     });
   });
 
+  describe('Schema regression: no raw Zod internals in output (issue #112)', () => {
+    // Regression test for https://github.com/QuantGeekDev/mcp-framework/issues/112
+    // In v0.2.14, tool schemas emitted raw Zod internals (_def, typeName, ~standard)
+    // instead of proper JSON Schema (type, properties, required, description).
+
+    function assertNoZodInternals(obj: unknown, path = 'root'): void {
+      if (obj === null || obj === undefined || typeof obj !== 'object') return;
+      const record = obj as Record<string, unknown>;
+      expect(record).not.toHaveProperty('_def');
+      expect(record).not.toHaveProperty('typeName');
+      expect(record).not.toHaveProperty('~standard');
+      expect(record).not.toHaveProperty('coerce');
+      for (const [key, value] of Object.entries(record)) {
+        if (typeof value === 'object' && value !== null) {
+          assertNoZodInternals(value, `${path}.${key}`);
+        }
+      }
+    }
+
+    it('should produce valid JSON Schema from a simple Zod object schema', () => {
+      const schema = z.object({
+        location: z
+          .string()
+          .describe("Location to get weather for (e.g., 'Paris', 'New York')"),
+      });
+
+      class WeatherTool extends MCPTool<z.infer<typeof schema>, typeof schema> {
+        name = 'weather';
+        description = 'Get weather information for a specific location';
+        schema = schema;
+        protected async execute(input: z.infer<typeof schema>) {
+          return { location: input.location };
+        }
+      }
+
+      const tool = new WeatherTool();
+      const definition = tool.toolDefinition;
+
+      // Exact structure from the issue's "expected" (v0.2.13) output
+      expect(definition).toEqual({
+        name: 'weather',
+        description: 'Get weather information for a specific location',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            location: {
+              type: 'string',
+              description: "Location to get weather for (e.g., 'Paris', 'New York')",
+            },
+          },
+          required: ['location'],
+        },
+      });
+    });
+
+    it('should never contain raw Zod internals in Zod object schema output', () => {
+      const schema = z.object({
+        query: z.string().describe('Search query'),
+        limit: z.number().int().positive().optional().default(10).describe('Max results'),
+        tags: z.array(z.string().describe('Tag value')).optional().describe('Filter tags'),
+        sortBy: z
+          .enum(['relevance', 'date', 'price'])
+          .optional()
+          .default('relevance')
+          .describe('Sort order'),
+        filters: z
+          .object({
+            minPrice: z.number().optional().describe('Minimum price'),
+            maxPrice: z.number().optional().describe('Maximum price'),
+          })
+          .optional()
+          .describe('Price filters'),
+      });
+
+      class SearchTool extends MCPTool<z.infer<typeof schema>, typeof schema> {
+        name = 'search';
+        description = 'Search items';
+        schema = schema;
+        protected async execute(input: z.infer<typeof schema>) {
+          return input;
+        }
+      }
+
+      const tool = new SearchTool();
+      const definition = tool.toolDefinition;
+
+      // Recursively verify no Zod internals leaked
+      assertNoZodInternals(definition);
+
+      // Verify it's valid JSON Schema structure
+      expect(definition.inputSchema.type).toBe('object');
+      expect(definition.inputSchema.properties).toBeDefined();
+      expect(typeof definition.inputSchema.properties).toBe('object');
+
+      const props = definition.inputSchema.properties!;
+
+      // Every property must have a string 'type' field
+      for (const [key, value] of Object.entries(props)) {
+        expect((value as any).type).toEqual(expect.any(String));
+        expect((value as any).description).toEqual(expect.any(String));
+      }
+
+      // Verify specific types
+      expect((props.query as any).type).toBe('string');
+      expect((props.limit as any).type).toBe('integer');
+      expect((props.tags as any).type).toBe('array');
+      expect((props.sortBy as any).type).toBe('string');
+      expect((props.sortBy as any).enum).toEqual(['relevance', 'date', 'price']);
+      expect((props.filters as any).type).toBe('object');
+      expect((props.filters as any).properties).toBeDefined();
+    });
+
+    it('should never contain raw Zod internals in legacy schema output', () => {
+      interface LegacyInput {
+        name: string;
+        age: number;
+        active?: boolean;
+      }
+
+      class LegacyTool extends MCPTool<LegacyInput> {
+        name = 'legacy_tool';
+        description = 'Tool with legacy schema format';
+        schema = {
+          name: { type: z.string(), description: 'User name' },
+          age: { type: z.number(), description: 'User age' },
+          active: { type: z.boolean().optional(), description: 'Is active' },
+        };
+        protected async execute(input: LegacyInput) {
+          return input;
+        }
+      }
+
+      const tool = new LegacyTool();
+      const definition = tool.toolDefinition;
+
+      assertNoZodInternals(definition);
+
+      const props = definition.inputSchema.properties!;
+      expect((props.name as any).type).toBe('string');
+      expect((props.age as any).type).toBe('number');
+      expect((props.active as any).type).toBe('boolean');
+    });
+
+    it('should produce JSON-serializable output with no circular references', () => {
+      const schema = z.object({
+        nested: z
+          .object({
+            items: z
+              .array(
+                z.object({
+                  id: z.number().describe('Item ID'),
+                  label: z.string().describe('Item label'),
+                })
+              )
+              .describe('List of items'),
+          })
+          .describe('Nested object'),
+      });
+
+      class NestedTool extends MCPTool<z.infer<typeof schema>, typeof schema> {
+        name = 'nested_tool';
+        description = 'Tool with deeply nested schema';
+        schema = schema;
+        protected async execute(input: z.infer<typeof schema>) {
+          return input;
+        }
+      }
+
+      const tool = new NestedTool();
+      const definition = tool.toolDefinition;
+
+      // Must survive JSON round-trip without loss
+      const serialized = JSON.stringify(definition);
+      const deserialized = JSON.parse(serialized);
+      expect(deserialized).toEqual(definition);
+
+      assertNoZodInternals(deserialized);
+
+      // Verify nested structure
+      const nested = (deserialized.inputSchema.properties.nested as any);
+      expect(nested.type).toBe('object');
+      expect(nested.properties.items.type).toBe('array');
+      expect(nested.properties.items.items.type).toBe('object');
+      expect(nested.properties.items.items.properties.id.type).toBe('number');
+      expect(nested.properties.items.items.properties.label.type).toBe('string');
+    });
+
+    it('should preserve string constraints as JSON Schema properties, not Zod checks', () => {
+      const schema = z.object({
+        email: z.string().email().describe('Email address'),
+        url: z.string().url().describe('Website URL'),
+        code: z.string().min(3).max(10).describe('Short code'),
+        pattern: z.string().regex(/^[A-Z]+$/).describe('Uppercase only'),
+      });
+
+      class ConstraintTool extends MCPTool<z.infer<typeof schema>, typeof schema> {
+        name = 'constraint_tool';
+        description = 'Tool with string constraints';
+        schema = schema;
+        protected async execute(input: z.infer<typeof schema>) {
+          return input;
+        }
+      }
+
+      const tool = new ConstraintTool();
+      const props = tool.inputSchema.properties!;
+
+      assertNoZodInternals(props);
+
+      expect((props.email as any).format).toBe('email');
+      expect((props.url as any).format).toBe('uri');
+      expect((props.code as any).minLength).toBe(3);
+      expect((props.code as any).maxLength).toBe(10);
+      expect((props.pattern as any).pattern).toBe('^[A-Z]+$');
+    });
+
+    it('should preserve number constraints as JSON Schema properties, not Zod checks', () => {
+      const schema = z.object({
+        age: z.number().int().positive().describe('Age'),
+        score: z.number().min(0).max(100).describe('Score'),
+      });
+
+      class NumConstraintTool extends MCPTool<z.infer<typeof schema>, typeof schema> {
+        name = 'num_constraint_tool';
+        description = 'Tool with number constraints';
+        schema = schema;
+        protected async execute(input: z.infer<typeof schema>) {
+          return input;
+        }
+      }
+
+      const tool = new NumConstraintTool();
+      const props = tool.inputSchema.properties!;
+
+      assertNoZodInternals(props);
+
+      expect((props.age as any).type).toBe('integer');
+      expect((props.age as any).minimum).toBe(1);
+      expect((props.score as any).type).toBe('number');
+      expect((props.score as any).minimum).toBe(0);
+      expect((props.score as any).maximum).toBe(100);
+    });
+  });
+
   describe('Sampling', () => {
     // Expose the protected samplingRequest for direct testing
     class SamplingTestTool extends MCPTool {
