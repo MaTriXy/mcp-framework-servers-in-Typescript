@@ -10,7 +10,15 @@ import {
   SubscribeRequestSchema,
   UnsubscribeRequestSchema,
   CompleteRequestSchema,
+  SetLevelRequestSchema,
+  CancelledNotificationSchema,
+  RootsListChangedNotificationSchema,
+  GetTaskRequestSchema,
+  GetTaskPayloadRequestSchema,
+  ListTasksRequestSchema,
+  CancelTaskRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { TaskManager } from './TaskManager.js';
 import { ToolProtocol } from '../tools/BaseTool.js';
 import { PromptProtocol } from '../prompts/BasePrompt.js';
 import { ResourceProtocol } from '../resources/BaseResource.js';
@@ -31,6 +39,14 @@ import { AuthConfig } from '../auth/types.js';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+
+export type MCPLogLevel = 'debug' | 'info' | 'notice' | 'warning' | 'error' | 'critical' | 'alert' | 'emergency';
+
+export const LOG_LEVEL_SEVERITY: Record<MCPLogLevel, number> = {
+  debug: 0, info: 1, notice: 2, warning: 3,
+  error: 4, critical: 5, alert: 6, emergency: 7,
+};
+
 export type TransportType = 'stdio' | 'sse' | 'http-stream';
 
 export interface TransportConfig {
@@ -39,11 +55,20 @@ export interface TransportConfig {
   auth?: AuthConfig;
 }
 
+export interface TasksConfig {
+  enabled: boolean;
+  defaultTtl?: number;
+  defaultPollInterval?: number;
+  maxTasks?: number;
+}
+
 export interface MCPServerConfig {
   name?: string;
   version?: string;
   basePath?: string;
   transport?: TransportConfig;
+  logging?: boolean;
+  tasks?: TasksConfig;
 }
 
 export type ServerCapabilities = {
@@ -58,6 +83,16 @@ export type ServerCapabilities = {
     subscribe?: true;
   };
   completions?: {};
+  logging?: {};
+  tasks?: {
+    list?: {};
+    cancel?: {};
+    requests?: {
+      tools?: {
+        call?: {};
+      };
+    };
+  };
 };
 
 export class MCPServer {
@@ -77,12 +112,20 @@ export class MCPServer {
   private transport?: BaseTransport;
   private shutdownPromise?: Promise<void>;
   private shutdownResolve?: () => void;
+  private _logLevel: MCPLogLevel = 'warning';
+  private _loggingEnabled: boolean = false;
+  private _inFlightAbortControllers = new Map<string | number, AbortController>();
+  private _roots: Array<{ uri: string; name?: string }> = [];
+  private _tasksConfig?: TasksConfig;
+  private _taskManager?: TaskManager;
 
   constructor(config: MCPServerConfig = {}) {
     this.basePath = this.resolveBasePath(config.basePath);
     this.serverName = config.name ?? this.getDefaultName();
     this.serverVersion = config.version ?? this.getDefaultVersion();
     this.transportConfig = config.transport ?? { type: 'stdio' };
+    this._loggingEnabled = config.logging ?? false;
+    this._tasksConfig = config.tasks;
 
     if (this.transportConfig.auth && this.transportConfig.options) {
       (this.transportConfig.options as any).auth = this.transportConfig.auth;
@@ -253,7 +296,7 @@ export class MCPServer {
       return response;
     });
 
-    targetServer.setRequestHandler(CallToolRequestSchema, async (request: any) => {
+    targetServer.setRequestHandler(CallToolRequestSchema, async (request: any, extra: any) => {
       logger.debug(`Tool call request received for: ${request.params.name}`);
       logger.debug(`Tool call arguments: ${JSON.stringify(request.params.arguments)}`);
 
@@ -265,6 +308,69 @@ export class MCPServer {
         throw new Error(errorMsg);
       }
 
+      // Check for task-augmented request
+      const taskParams = request.params?.task;
+      if (taskParams && this._taskManager && this.capabilities.tasks) {
+        const toolDef = tool.toolDefinition;
+        const taskSupport = toolDef.execution?.taskSupport ?? 'forbidden';
+        if (taskSupport === 'forbidden') {
+          throw new Error(
+            `Tool '${tool.name}' does not support task-augmented execution`
+          );
+        }
+
+        const taskState = this._taskManager.createTask(taskParams.ttl);
+        logger.debug(`Created task ${taskState.taskId} for tool ${tool.name}`);
+
+        // Execute the tool asynchronously in the background
+        const taskManager = this._taskManager;
+        const executeAsync = async () => {
+          try {
+            const toolRequest = {
+              params: request.params,
+              method: 'tools/call' as const,
+            };
+
+            const progressToken = request.params?._meta?.progressToken;
+            const abortSignal = extra?.signal as AbortSignal | undefined;
+            tool.setProgressToken(progressToken);
+            tool.setAbortSignal(abortSignal);
+
+            try {
+              const result = await tool.toolCall(toolRequest);
+              taskManager.completeTask(taskState.taskId, result);
+              logger.debug(`Task ${taskState.taskId} completed successfully`);
+            } finally {
+              tool.setProgressToken(undefined);
+              tool.setAbortSignal(undefined);
+            }
+          } catch (error) {
+            try {
+              taskManager.failTask(taskState.taskId, error);
+            } catch {
+              // Task may have been cancelled or expired
+            }
+            logger.error(`Task ${taskState.taskId} failed: ${error}`);
+          }
+        };
+
+        // Fire and forget
+        executeAsync();
+
+        // Return CreateTaskResult immediately
+        return {
+          task: {
+            taskId: taskState.taskId,
+            status: taskState.status,
+            createdAt: taskState.createdAt,
+            lastUpdatedAt: taskState.lastUpdatedAt,
+            ttl: taskState.ttl,
+            ...(taskState.pollInterval != null && { pollInterval: taskState.pollInterval }),
+          },
+        };
+      }
+
+      // Synchronous execution path (no task params)
       try {
         logger.debug(`Executing tool: ${tool.name}`);
         const toolRequest = {
@@ -272,9 +378,20 @@ export class MCPServer {
           method: 'tools/call' as const,
         };
 
-        const result = await tool.toolCall(toolRequest);
-        logger.debug(`Tool execution successful: ${JSON.stringify(result)}`);
-        return result;
+        // Set progress token and abort signal from the SDK extra context
+        const progressToken = request.params?._meta?.progressToken;
+        const abortSignal = extra?.signal as AbortSignal | undefined;
+        tool.setProgressToken(progressToken);
+        tool.setAbortSignal(abortSignal);
+
+        try {
+          const result = await tool.toolCall(toolRequest);
+          logger.debug(`Tool execution successful: ${JSON.stringify(result)}`);
+          return result;
+        } finally {
+          tool.setProgressToken(undefined);
+          tool.setAbortSignal(undefined);
+        }
       } catch (error) {
         const errorMsg = `Tool execution failed: ${error}`;
         logger.error(errorMsg);
@@ -399,6 +516,109 @@ export class MCPServer {
         return { completion: { values: [] } };
       });
     }
+
+    if (this.capabilities.logging) {
+      targetServer.setRequestHandler(SetLevelRequestSchema, async (request: any) => {
+        const level = request.params.level as MCPLogLevel;
+        if (!LOG_LEVEL_SEVERITY.hasOwnProperty(level)) {
+          throw new Error(`Invalid log level: ${level}`);
+        }
+        this._logLevel = level;
+        logger.info(`MCP log level set to: ${level}`);
+        return {};
+      });
+    }
+
+    targetServer.setNotificationHandler(CancelledNotificationSchema, async (notification: any) => {
+      const requestId = notification.params.requestId;
+      if (requestId != null) {
+        const controller = this._inFlightAbortControllers.get(requestId);
+        if (controller) {
+          controller.abort(notification.params.reason ?? 'Request cancelled');
+          this._inFlightAbortControllers.delete(requestId);
+          logger.info(`Request ${requestId} cancelled: ${notification.params.reason ?? 'no reason'}`);
+        }
+      }
+    });
+
+    // Listen for roots/list_changed notifications from the client and refresh
+    // the cached roots list when the client signals a change.
+    targetServer.setNotificationHandler(RootsListChangedNotificationSchema, async () => {
+      try {
+        this._roots = await this.listRoots();
+        logger.info(`Roots updated: ${this._roots.length} roots available`);
+      } catch (error) {
+        logger.warn(`Failed to refresh roots: ${error}`);
+      }
+    });
+
+    // Task handlers
+    if (this.capabilities.tasks && this._taskManager) {
+      const taskManager = this._taskManager;
+
+      targetServer.setRequestHandler(GetTaskRequestSchema, async (request: any) => {
+        const { taskId } = request.params;
+        const task = taskManager.getTask(taskId);
+        if (!task) {
+          throw new Error(`Task not found: ${taskId}`);
+        }
+        return {
+          taskId: task.taskId,
+          status: task.status,
+          createdAt: task.createdAt,
+          lastUpdatedAt: task.lastUpdatedAt,
+          ttl: task.ttl,
+          ...(task.pollInterval != null && { pollInterval: task.pollInterval }),
+          ...(task.statusMessage != null && { statusMessage: task.statusMessage }),
+        };
+      });
+
+      targetServer.setRequestHandler(GetTaskPayloadRequestSchema, async (request: any) => {
+        const { taskId } = request.params;
+        const task = taskManager.getTask(taskId);
+        if (!task) {
+          throw new Error(`Task not found: ${taskId}`);
+        }
+        if (task.status !== 'completed') {
+          throw new Error(
+            `Task ${taskId} is not completed (status: ${task.status}). ` +
+            `Poll tasks/get until status is 'completed' before requesting the result.`
+          );
+        }
+        return task.result ?? {};
+      });
+
+      targetServer.setRequestHandler(ListTasksRequestSchema, async (request: any) => {
+        const cursor = request.params?.cursor;
+        const { tasks, nextCursor } = taskManager.listTasks(cursor);
+        return {
+          tasks: tasks.map((t) => ({
+            taskId: t.taskId,
+            status: t.status,
+            createdAt: t.createdAt,
+            lastUpdatedAt: t.lastUpdatedAt,
+            ttl: t.ttl,
+            ...(t.pollInterval != null && { pollInterval: t.pollInterval }),
+            ...(t.statusMessage != null && { statusMessage: t.statusMessage }),
+          })),
+          ...(nextCursor && { nextCursor }),
+        };
+      });
+
+      targetServer.setRequestHandler(CancelTaskRequestSchema, async (request: any) => {
+        const { taskId } = request.params;
+        const task = taskManager.cancelTask(taskId);
+        return {
+          taskId: task.taskId,
+          status: task.status,
+          createdAt: task.createdAt,
+          lastUpdatedAt: task.lastUpdatedAt,
+          ttl: task.ttl,
+          ...(task.pollInterval != null && { pollInterval: task.pollInterval }),
+          ...(task.statusMessage != null && { statusMessage: task.statusMessage }),
+        };
+      });
+    }
   }
 
   private async detectCapabilities(): Promise<ServerCapabilities> {
@@ -417,9 +637,32 @@ export class MCPServer {
       logger.debug('Resources capability enabled');
     }
 
+    if (this._loggingEnabled) {
+      this.capabilities.logging = {};
+      logger.debug('Logging capability enabled');
+    }
+
     if (this.capabilities.prompts || this.capabilities.resources) {
       this.capabilities.completions = {};
       logger.debug('Completions capability enabled');
+    }
+
+    if (this._tasksConfig?.enabled && this.capabilities.tools) {
+      this._taskManager = new TaskManager({
+        defaultTtl: this._tasksConfig.defaultTtl,
+        defaultPollInterval: this._tasksConfig.defaultPollInterval,
+        maxTasks: this._tasksConfig.maxTasks,
+      });
+      this.capabilities.tasks = {
+        list: {},
+        cancel: {},
+        requests: {
+          tools: {
+            call: {},
+          },
+        },
+      };
+      logger.debug('Tasks capability enabled');
     }
 
     logger.debug(`Capabilities detected: ${JSON.stringify(this.capabilities)}`);
@@ -607,5 +850,47 @@ export class MCPServer {
 
   get IsRunning(): boolean {
     return this.isRunning;
+  }
+
+  /**
+   * Query the client for its filesystem root boundaries.
+   * Returns an empty array if the client doesn't support roots.
+   */
+  public async listRoots(): Promise<Array<{ uri: string; name?: string }>> {
+    if (!this.server) return [];
+    try {
+      const result = await this.server.listRoots();
+      return result.roots ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Returns the cached roots list (updated automatically when the client
+   * sends a roots/list_changed notification).
+   */
+  public get roots(): ReadonlyArray<{ uri: string; name?: string }> {
+    return this._roots;
+  }
+
+  /**
+   * Send a logging message to the client via the MCP logging protocol.
+   * Messages below the current log level threshold will be silently dropped.
+   */
+  public async sendLog(level: MCPLogLevel, loggerName: string, data: unknown): Promise<void> {
+    if (!this._loggingEnabled || !this.server) return;
+    if (LOG_LEVEL_SEVERITY[level] < LOG_LEVEL_SEVERITY[this._logLevel]) return;
+
+    try {
+      await this.server.sendLoggingMessage({
+        level,
+        logger: loggerName,
+        data,
+      });
+    } catch (error) {
+      // Don't throw on logging failures
+      logger.debug(`Failed to send log message: ${error}`);
+    }
   }
 }

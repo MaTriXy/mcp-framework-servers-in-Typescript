@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MCPIcon } from '../tools/BaseTool.js';
 
 export type CompletionResult = {
   values: string[];
@@ -29,6 +30,8 @@ export interface PromptProtocol {
       description: string;
       required?: boolean;
     }>;
+    title?: string;
+    icons?: MCPIcon[];
   };
   getMessages(args?: Record<string, unknown>): Promise<
     Array<{
@@ -57,6 +60,8 @@ export abstract class MCPPrompt<TArgs extends Record<string, any> = {}>
   abstract name: string;
   abstract description: string;
   protected abstract schema: PromptArgumentSchema<TArgs>;
+  protected title?: string;
+  protected icons?: MCPIcon[];
 
   get promptDefinition() {
     return {
@@ -67,6 +72,8 @@ export abstract class MCPPrompt<TArgs extends Record<string, any> = {}>
         description: schema.description,
         required: schema.required ?? false,
       })),
+      ...(this.title && { title: this.title }),
+      ...(this.icons && this.icons.length > 0 && { icons: this.icons }),
     };
   }
 

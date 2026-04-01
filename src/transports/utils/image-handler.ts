@@ -10,12 +10,22 @@ export interface ImageTransportOptions {
 }
 
 /**
+ * Schema for content annotations
+ */
+export const ContentAnnotationsSchema = z.object({
+  audience: z.array(z.enum(['user', 'assistant'])).optional(),
+  priority: z.number().optional(),
+  lastModified: z.string().optional(),
+}).optional();
+
+/**
  * Schema for image content validation
  */
 export const ImageContentSchema = z.object({
   type: z.literal("image"),
   data: z.string(),
-  mimeType: z.string()
+  mimeType: z.string(),
+  annotations: ContentAnnotationsSchema,
 });
 
 export type ImageContent = z.infer<typeof ImageContentSchema>;
