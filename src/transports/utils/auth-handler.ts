@@ -28,12 +28,31 @@ export async function handleAuthentication(
 
   const isApiKey = authConfig.provider instanceof APIKeyAuthProvider;
 
-  // Special handling for API Key - check header exists before authenticate
+  // Special handling for API Key - check header/Bearer/query exists before authenticate
   if (isApiKey) {
     const provider = authConfig.provider as APIKeyAuthProvider;
     const headerValue = getRequestHeader(req.headers, provider.getHeaderName());
 
+    // Also check Authorization Bearer and query parameter as fallbacks
+    // (for SSE clients like EventSource that can't send custom headers)
+    let hasFallbackKey = false;
     if (!headerValue) {
+      const authHeader = req.headers['authorization'];
+      if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+        hasFallbackKey = true;
+      }
+
+      if (!hasFallbackKey && req.url) {
+        try {
+          const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+          hasFallbackKey = !!(url.searchParams.get('api_key') || url.searchParams.get('apiKey'));
+        } catch {
+          // URL parsing failed
+        }
+      }
+    }
+
+    if (!headerValue && !hasFallbackKey) {
       const error = provider.getAuthError?.() || DEFAULT_AUTH_ERROR;
       res.setHeader('WWW-Authenticate', `ApiKey realm="MCP Server", header="${provider.getHeaderName()}"`);
       res.writeHead(error.status).end(
