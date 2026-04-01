@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createRequire } from 'module';
 import { Command } from 'commander';
 import { createProject } from './project/create.js';
 import { addTool } from './project/add-tool.js';
@@ -7,9 +8,12 @@ import { addResource } from './project/add-resource.js';
 import { buildFramework } from './framework/build.js';
 import { validateCommand } from './commands/validate.js';
 
+const require = createRequire(import.meta.url);
+const frameworkPackageJson = require('../../package.json');
+
 const program = new Command();
 
-program.name('mcp').description('CLI for managing MCP server projects').version('0.2.2');
+program.name('mcp').description('CLI for managing MCP server projects').version(frameworkPackageJson.version);
 
 program.command('build').description('Build the MCP project').action(buildFramework);
 

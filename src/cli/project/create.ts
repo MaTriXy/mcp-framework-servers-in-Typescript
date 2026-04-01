@@ -1,9 +1,13 @@
+import { createRequire } from 'module';
 import { spawnSync } from 'child_process';
 import { mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import prompts from 'prompts';
 import { generateReadme } from '../templates/readme.js';
 import { execa } from 'execa';
+
+const require = createRequire(import.meta.url);
+const frameworkPackageJson = require('../../../package.json');
 
 export async function createProject(
   name?: string,
@@ -74,7 +78,7 @@ export async function createProject(
         start: 'node dist/index.js',
       },
       dependencies: {
-        'mcp-framework': '^0.2.2',
+        'mcp-framework': `^${frameworkPackageJson.version}`,
         ...(options?.oauth && { dotenv: '^16.3.1' }),
       },
       devDependencies: {
