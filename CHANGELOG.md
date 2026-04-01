@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.19](https://github.com/QuantGeekDev/mcp-framework/compare/mcp-framework-v0.2.18...mcp-framework-v0.2.19) (2026-04-01)
+
+
+### Features
+
+* add @mcp-framework/docs package ([6bfa4f4](https://github.com/QuantGeekDev/mcp-framework/commit/6bfa4f4fb69ebc13c9609b41752f4dd5da73f3d4))
+* add @mcp-framework/docs package for documentation MCP servers ([ed62bdd](https://github.com/QuantGeekDev/mcp-framework/commit/ed62bdd54f4c033adccc4ccdbf6885f68e2fd99c))
+* add completion and resource template support ([d8bd6a9](https://github.com/QuantGeekDev/mcp-framework/commit/d8bd6a9319b36dd8f6ca1e525fae5726a27422e7))
+* Add completion and resource template support ([c42c4e2](https://github.com/QuantGeekDev/mcp-framework/commit/c42c4e22bc51df60c10794c9c59d2108edb55ae4))
+* add sampling support to tools ([3a31cef](https://github.com/QuantGeekDev/mcp-framework/commit/3a31cef7e7d81541765a59dea736c94791e0789b))
+
+
+### Bug Fixes
+
+* add helpful error for incorrect schema format and update CLI templates ([254db89](https://github.com/QuantGeekDev/mcp-framework/commit/254db897c36e70391e8047e7b41daf1a43c290c2))
+* add helpful error for incorrect schema format and update CLI templates to Zod-first ([96a8c70](https://github.com/QuantGeekDev/mcp-framework/commit/96a8c70b752bf13eebb4623ac3f86d5c05dbd20b)), closes [#121](https://github.com/QuantGeekDev/mcp-framework/issues/121)
+* dynamically resolve CLI and template version from package.json ([fb79eb6](https://github.com/QuantGeekDev/mcp-framework/commit/fb79eb6a7f27492e50930ec775ba191e27fd205a))
+* dynamically resolve CLI and template version from package.json ([767be41](https://github.com/QuantGeekDev/mcp-framework/commit/767be411f7d264ff6a3697f261e5ff42bbb10e5a)), closes [#117](https://github.com/QuantGeekDev/mcp-framework/issues/117)
+* improve path resolution for npx and non-standard entry points ([8baf8e1](https://github.com/QuantGeekDev/mcp-framework/commit/8baf8e14dc6254dfc7c7465c47a85a200afa54d5))
+* improve path resolution for npx and non-standard entry points ([ced79f1](https://github.com/QuantGeekDev/mcp-framework/commit/ced79f1430f9e53ec58adcfbc90875f740ff1761)), closes [#82](https://github.com/QuantGeekDev/mcp-framework/issues/82)
+* support .ts file extensions in loaders for tsx compatibility ([7add2f7](https://github.com/QuantGeekDev/mcp-framework/commit/7add2f7b5df6ae932dd6125bff7e1bffd80b87d5))
+* support .ts file extensions in loaders for tsx compatibility ([9369512](https://github.com/QuantGeekDev/mcp-framework/commit/9369512dfae81d2351fe5ee5789b08497e30b7b9)), closes [#65](https://github.com/QuantGeekDev/mcp-framework/issues/65)
+* use shared DEFAULT_CORS_CONFIG in HTTP stream transport ([a2d93a0](https://github.com/QuantGeekDev/mcp-framework/commit/a2d93a07c1faadba4db683795915d52b3924f1f1))
+* use shared DEFAULT_CORS_CONFIG in HTTP stream transport ([3f7beaa](https://github.com/QuantGeekDev/mcp-framework/commit/3f7beaab832079d8efcb75b4ace529bb63bbe2b3)), closes [#93](https://github.com/QuantGeekDev/mcp-framework/issues/93)
+* validate descriptions on nested object fields in Zod schemas ([04ca64f](https://github.com/QuantGeekDev/mcp-framework/commit/04ca64fa867072b54319cd3ac56692e1188d68d4))
+* validate descriptions on nested object fields in Zod schemas ([c719374](https://github.com/QuantGeekDev/mcp-framework/commit/c719374ac9d16a6c4a589992beec53862230486d)), closes [#34](https://github.com/QuantGeekDev/mcp-framework/issues/34)
+
 ## [0.2.18](https://github.com/QuantGeekDev/mcp-framework/compare/mcp-framework-v0.2.17...mcp-framework-v0.2.18) (2026-02-05)
 
 
