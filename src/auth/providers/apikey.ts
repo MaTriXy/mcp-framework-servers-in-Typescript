@@ -13,7 +13,10 @@ export interface APIKeyConfig {
   keys: string[];
 
   /**
-   * Name of the header containing the API key
+   * Name of the header containing the API key.
+   * Note: Some SSE client libraries (including the standard EventSource API)
+   * do not support custom headers. For these clients, the API key can also
+   * be sent as a query parameter: ?api_key=<key> or ?apiKey=<key>
    * @default "X-API-Key"
    */
   headerName?: string;
@@ -78,8 +81,37 @@ export class APIKeyAuthProvider implements AuthProvider {
       }
     }
     
+    // Fallback: check Authorization Bearer header
+    // Some clients (e.g., LangChain) may send API key as Bearer token
     if (!apiKey) {
-      logger.debug(`API Key header missing}`);
+      const authHeader = req.headers['authorization'];
+      if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+        const bearerToken = authHeader.slice(7).trim();
+        if (bearerToken) {
+          apiKey = bearerToken;
+          matchedHeader = 'Authorization Bearer';
+          logger.debug('API key found in Authorization Bearer header (fallback)');
+        }
+      }
+    }
+
+    // Fallback: check query parameter for SSE clients that cannot send custom headers
+    if (!apiKey && req.url) {
+      try {
+        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        const queryKey = url.searchParams.get('api_key') || url.searchParams.get('apiKey');
+        if (queryKey) {
+          apiKey = queryKey;
+          matchedHeader = 'query parameter';
+          logger.debug('API key found in query parameter (EventSource fallback)');
+        }
+      } catch {
+        // URL parsing failed, skip query parameter check
+      }
+    }
+
+    if (!apiKey) {
+      logger.debug(`API Key header missing`);
       logger.debug(`Available headers: ${Object.keys(req.headers).join(', ')}`);
       return false;
     }
