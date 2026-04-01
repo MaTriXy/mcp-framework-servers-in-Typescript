@@ -1,17 +1,8 @@
 import { z } from 'zod';
-import { Tool as SDKTool } from '@modelcontextprotocol/sdk/types.js';
+import { CreateMessageRequest, CreateMessageResult, Tool as SDKTool } from '@modelcontextprotocol/sdk/types.js';
 import { ImageContent } from '../transports/utils/image-handler.js';
-
-// Type to check if a Zod type has a description
-type HasDescription<T> = T extends { _def: { description: string } } ? T : never;
-
-// Type to ensure all properties in a Zod object have descriptions
-type AllFieldsHaveDescriptions<T extends z.ZodRawShape> = {
-  [K in keyof T]: HasDescription<T[K]>;
-};
-
-// Strict Zod object type that requires all fields to have descriptions
-type StrictZodObject<T extends z.ZodRawShape> = z.ZodObject<AllFieldsHaveDescriptions<T>>;
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
 
 export type ToolInputSchema<T> = {
   [K in keyof T]: {
@@ -64,6 +55,7 @@ export interface ToolProtocol extends SDKTool {
   toolCall(request: {
     params: { name: string; arguments?: Record<string, unknown> };
   }): Promise<ToolResponse>;
+  injectServer(server: Server): void;
 }
 
 /**
@@ -99,6 +91,46 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       : z.ZodObject<any> | ToolInputSchema<TInput>;
   protected useStringify: boolean = true;
   [key: string]: unknown;
+
+  private server: Server | undefined;
+
+  /**
+   * Injects the server into this tool to allow sampling requests.
+   * Automatically called by the MCP server when registering the tool.
+   * Subsequent calls are silently ignored.
+   */
+  public injectServer(server: Server): void {
+    if (this.server) {
+      return;
+    }
+    this.server = server;
+  }
+
+  /**
+   * Submit a sampling request to the client via the MCP sampling protocol.
+   * Can only be called from within a tool's execute() method after the server
+   * has been injected.
+   *
+   * @example
+   * ```typescript
+   * const result = await this.samplingRequest({
+   *   messages: [{ role: "user", content: { type: "text", text: "Hello!" } }],
+   *   maxTokens: 100
+   * });
+   * ```
+   */
+  protected async samplingRequest(
+    request: CreateMessageRequest['params'],
+    options?: RequestOptions,
+  ): Promise<CreateMessageResult> {
+    if (!this.server) {
+      throw new Error(
+        `Cannot make sampling request: server not available in tool '${this.name}'. ` +
+        `Sampling is only available during tool execution within an MCPServer.`,
+      );
+    }
+    return this.server.createMessage(request, options);
+  }
 
   /**
    * Validates the tool schema. This is called automatically when the tool is registered
