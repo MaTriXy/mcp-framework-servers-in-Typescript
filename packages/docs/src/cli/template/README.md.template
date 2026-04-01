@@ -1,0 +1,74 @@
+# {{PROJECT_NAME}}
+
+MCP documentation server powered by [@mcp-framework/docs](https://www.npmjs.com/package/@mcp-framework/docs).
+
+## Setup
+
+1. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+2. Configure your documentation source:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your documentation site URL
+   ```
+
+3. Build and start:
+   ```bash
+   npm run build
+   npm start
+   ```
+
+## MCP Client Configuration
+
+### Claude Code
+```bash
+claude mcp add {{PROJECT_NAME}} -- node /path/to/{{PROJECT_NAME}}/dist/index.js
+```
+
+### Claude Desktop
+Add to your `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "{{PROJECT_NAME}}": {
+      "command": "node",
+      "args": ["/path/to/{{PROJECT_NAME}}/dist/index.js"],
+      "env": {
+        "DOCS_BASE_URL": "https://docs.example.com"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+Add to your MCP settings:
+```json
+{
+  "{{PROJECT_NAME}}": {
+    "command": "node",
+    "args": ["/path/to/{{PROJECT_NAME}}/dist/index.js"],
+    "env": {
+      "DOCS_BASE_URL": "https://docs.example.com"
+    }
+  }
+}
+```
+
+## Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_docs` | Search documentation by keyword or phrase |
+| `get_page` | Retrieve full content of a documentation page |
+| `list_sections` | Browse the documentation structure |
+
+## Requirements
+
+Your documentation site must serve at least one of:
+- `/llms.txt` — documentation index
+- `/llms-full.txt` — full documentation content
+- `/api/search` — Fumadocs Orama search endpoint (optional, for better search)

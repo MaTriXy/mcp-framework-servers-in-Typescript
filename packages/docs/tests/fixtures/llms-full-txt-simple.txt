@@ -1,0 +1,174 @@
+# Introduction (https://docs.myapi.com/docs/introduction)
+
+MyAPI is a powerful platform for building integrations. It provides RESTful APIs, webhooks, and SDKs for multiple languages.
+
+## Core Concepts
+
+- **Resources**: Everything in MyAPI is a resource (users, projects, etc.)
+- **Authentication**: All API calls require authentication via API keys or OAuth
+- **Rate Limiting**: Default rate limit is 1000 requests per minute
+
+# Installation (https://docs.myapi.com/docs/installation)
+
+Install the MyAPI SDK using npm:
+
+```bash
+npm install myapi-sdk
+```
+
+Or using yarn:
+
+```bash
+yarn add myapi-sdk
+```
+
+## Requirements
+
+- Node.js 18 or later
+- TypeScript 5.0+ (optional but recommended)
+
+# Quick Start (https://docs.myapi.com/docs/quick-start)
+
+Get started with MyAPI in just a few steps:
+
+```typescript
+import { MyAPI } from 'myapi-sdk';
+
+const client = new MyAPI({ apiKey: 'your-api-key' });
+
+const users = await client.users.list();
+console.log(users);
+```
+
+## Next Steps
+
+- Read about [Authentication](/docs/auth/api-keys)
+- Explore the [API Reference](/docs/api/users)
+
+# API Keys (https://docs.myapi.com/docs/auth/api-keys)
+
+API keys are the simplest way to authenticate with MyAPI. Each key is scoped to a specific project.
+
+## Creating an API Key
+
+1. Navigate to Settings > API Keys
+2. Click "Create New Key"
+3. Select the appropriate permissions
+4. Copy the key (it won't be shown again)
+
+## Using API Keys
+
+Include the key in the Authorization header:
+
+```
+Authorization: Bearer your-api-key
+```
+
+# OAuth 2.0 (https://docs.myapi.com/docs/auth/oauth)
+
+OAuth 2.0 is recommended for applications that act on behalf of users. MyAPI supports the Authorization Code flow and Client Credentials flow.
+
+## Authorization Code Flow
+
+1. Redirect user to authorization URL
+2. User grants permission
+3. Exchange authorization code for access token
+4. Use access token for API calls
+
+## Client Credentials Flow
+
+For server-to-server communication, use client credentials:
+
+```typescript
+const token = await client.auth.getToken({
+  grantType: 'client_credentials',
+  clientId: 'your-client-id',
+  clientSecret: 'your-client-secret',
+});
+```
+
+# Users (https://docs.myapi.com/docs/api/users)
+
+The Users API allows you to manage user accounts.
+
+## List Users
+
+```
+GET /api/v1/users
+```
+
+Returns a paginated list of users.
+
+## Create User
+
+```
+POST /api/v1/users
+```
+
+Creates a new user account.
+
+### Request Body
+
+```json
+{
+  "email": "user@example.com",
+  "name": "John Doe",
+  "role": "member"
+}
+```
+
+# Projects (https://docs.myapi.com/docs/api/projects)
+
+The Projects API allows you to create and manage projects.
+
+## List Projects
+
+```
+GET /api/v1/projects
+```
+
+## Create Project
+
+```
+POST /api/v1/projects
+```
+
+### Request Body
+
+```json
+{
+  "name": "My Project",
+  "description": "A sample project"
+}
+```
+
+# Webhooks (https://docs.myapi.com/docs/api/webhooks)
+
+Webhooks allow you to receive real-time notifications when events occur in MyAPI.
+
+## Supported Events
+
+- `user.created` - A new user was created
+- `user.updated` - A user was updated
+- `project.created` - A new project was created
+- `project.deleted` - A project was deleted
+
+## Configuring Webhooks
+
+```typescript
+await client.webhooks.create({
+  url: 'https://your-app.com/webhook',
+  events: ['user.created', 'project.created'],
+  secret: 'your-webhook-secret',
+});
+```
+
+## Verifying Webhook Signatures
+
+Always verify the signature of incoming webhooks to ensure they're from MyAPI:
+
+```typescript
+import { verifyWebhookSignature } from 'myapi-sdk';
+
+const isValid = verifyWebhookSignature(payload, signature, secret);
+```

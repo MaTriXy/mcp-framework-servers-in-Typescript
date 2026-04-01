@@ -1,0 +1,29 @@
+[
+  {
+    "id": "/docs/auth/api-keys",
+    "url": "/docs/auth/api-keys",
+    "type": "page",
+    "content": "API keys are the simplest way to authenticate with MyAPI. Each key is scoped to a specific project.",
+    "structured": {
+      "heading": "API Keys"
+    }
+  },
+  {
+    "id": "/docs/auth/oauth",
+    "url": "/docs/auth/oauth",
+    "type": "page",
+    "content": "OAuth 2.0 is recommended for applications that act on behalf of users.",
+    "structured": {
+      "heading": "OAuth 2.0"
+    }
+  },
+  {
+    "id": "/docs/quick-start",
+    "url": "/docs/quick-start",
+    "type": "page",
+    "content": "Get started with MyAPI in just a few steps. Include the key in the Authorization header.",
+    "structured": {
+      "heading": "Quick Start"
+    }
+  }
+]
