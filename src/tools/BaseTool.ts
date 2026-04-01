@@ -3,6 +3,10 @@ import { CreateMessageRequest, CreateMessageResult, CreateMessageResultWithTools
 import { ImageContent } from '../transports/utils/image-handler.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import type { ToolAppConfig } from '../apps/types.js';
+import { MCP_APP_MIME_TYPE } from '../apps/types.js';
+import { validateAppUri, validateAppToolVisibility, warnContentSize } from '../apps/validation.js';
+import type { ResourceDefinition } from '../resources/BaseResource.js';
 
 /**
  * Schema definition for a single field in an elicitation form.
@@ -174,6 +178,7 @@ export interface ToolProtocol extends SDKTool {
     annotations?: ToolAnnotations;
     execution?: ToolExecution;
     outputSchema?: Record<string, unknown>;
+    _meta?: Record<string, unknown>;
   };
   toolCall(request: {
     params: { name: string; arguments?: Record<string, unknown> };
@@ -215,6 +220,9 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       ? TSchema
       : z.ZodObject<any> | ToolInputSchema<TInput>;
   protected useStringify: boolean = true;
+  /** Optional MCP App configuration. When set, the tool's definition
+   *  includes _meta.ui linking it to an auto-registered UI resource. */
+  protected app?: ToolAppConfig;
   title?: string;
   icons?: MCPIcon[];
   annotations?: ToolAnnotations;
@@ -551,6 +559,13 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       // Access inputSchema to trigger validation
       const _ = this.inputSchema;
     }
+    if (this.app) {
+      validateAppUri(this.app.resourceUri, `tool "${this.name}"`);
+      if (!this.app.resourceName) {
+        throw new Error(`Tool "${this.name}" app config must have a resourceName.`);
+      }
+      validateAppToolVisibility(this.app.visibility, this.name);
+    }
   }
 
   private isZodObjectSchema(schema: unknown): schema is z.ZodObject<any> {
@@ -849,6 +864,14 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       ...(this.annotations && Object.keys(this.annotations).length > 0 && { annotations: this.annotations }),
       ...(this.execution && Object.keys(this.execution).length > 0 && { execution: this.execution }),
       ...(this.outputSchemaShape && { outputSchema: this.generateOutputSchema() }),
+      ...(this.app && {
+        _meta: {
+          ui: {
+            resourceUri: this.app.resourceUri,
+            ...(this.app.visibility && { visibility: this.app.visibility }),
+          },
+        },
+      }),
     };
   }
 
@@ -1025,6 +1048,33 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
     return this.isImageContent(data) || this.isTextContent(data) ||
            this.isAudioContent(data) || this.isResourceLinkContent(data) ||
            this.isEmbeddedResourceContent(data);
+  }
+
+  /** Returns true if this tool has an attached MCP App. */
+  get hasApp(): boolean {
+    return !!this.app;
+  }
+
+  /** Returns the ResourceDefinition for the attached app, or undefined. */
+  get appResourceDefinition(): ResourceDefinition | undefined {
+    if (!this.app) return undefined;
+    return {
+      uri: this.app.resourceUri,
+      name: this.app.resourceName,
+      description: this.app.resourceDescription,
+      mimeType: MCP_APP_MIME_TYPE,
+    };
+  }
+
+  /** Reads the attached app's HTML content. Throws if no app is configured. */
+  async readAppContent(): Promise<string> {
+    if (!this.app) {
+      throw new Error(`Tool "${this.name}" has no app configuration.`);
+    }
+    const content =
+      typeof this.app.content === 'function' ? await this.app.content() : this.app.content;
+    warnContentSize(content, this.name);
+    return content;
   }
 
   protected async fetch<T>(url: string, init?: RequestInit): Promise<T> {
