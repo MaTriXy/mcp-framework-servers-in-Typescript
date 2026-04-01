@@ -40,25 +40,19 @@ export async function addTool(name?: string) {
   try {
     await mkdir(toolsDir, { recursive: true });
 
-    const toolContent = `import { MCPTool } from "mcp-framework";
+    const toolContent = `import { MCPTool, MCPInput } from "mcp-framework";
 import { z } from "zod";
 
-interface ${className}Input {
-  message: string;
-}
+const schema = z.object({
+  message: z.string().describe("Message to process"),
+});
 
-class ${className}Tool extends MCPTool<${className}Input> {
+class ${className}Tool extends MCPTool {
   name = "${toolName}";
   description = "${className} tool description";
+  schema = schema;
 
-  schema = {
-    message: {
-      type: z.string(),
-      description: "Message to process",
-    },
-  };
-
-  async execute(input: ${className}Input) {
+  async execute(input: MCPInput<this>) {
     return \`Processed: \${input.message}\`;
   }
 }
