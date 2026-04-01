@@ -256,6 +256,70 @@ await app.connect();
 
 React hooks are available via `@modelcontextprotocol/ext-apps/react`.
 
+### React Apps
+
+The fastest way to create a React-based MCP App:
+
+```bash
+# Standalone app (Mode A)
+mcp add app my-dashboard --react
+
+# Individual tool with React UI (Mode B)
+mcp add tool my-widget --react
+```
+
+This generates a complete React project in `src/app-views/<name>/`:
+
+```
+src/app-views/my-dashboard/
+├── App.tsx           # React component with useApp() wired up
+├── styles.css        # Host theme fallbacks + base styles
+├── index.html        # Vite entry point
+├── vite.config.ts    # react() + viteSingleFile()
+└── tsconfig.json     # Client-side config (react-jsx, DOM)
+```
+
+Install the React dependencies:
+
+```bash
+npm install @modelcontextprotocol/ext-apps @modelcontextprotocol/sdk react react-dom
+npm install -D @types/react @types/react-dom @vitejs/plugin-react vite vite-plugin-singlefile
+```
+
+Build the view into a single HTML file:
+
+```bash
+cd src/app-views/my-dashboard && npx vite build
+```
+
+The generated React component uses `useApp()` from `@modelcontextprotocol/ext-apps/react` to handle the MCP Apps protocol automatically:
+
+```tsx
+import { useApp } from "@modelcontextprotocol/ext-apps/react";
+
+function MyDashboard() {
+  const [toolResult, setToolResult] = useState(null);
+
+  const { app, error } = useApp({
+    appInfo: { name: "my-dashboard", version: "1.0.0" },
+    onAppCreated: (app) => {
+      app.ontoolresult = (result) => setToolResult(result);
+    },
+  });
+
+  if (!app) return <div>Connecting...</div>;
+
+  return (
+    <div>
+      <h2>Dashboard</h2>
+      {/* Your interactive UI here */}
+    </div>
+  );
+}
+```
+
+Host theme variables are automatically applied, so your app matches the look of Claude, ChatGPT, or VS Code.
+
 ## UI Configuration
 
 ### Content Security Policy (CSP)
