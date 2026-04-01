@@ -150,9 +150,31 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
   get inputSchema(): { type: 'object'; properties?: Record<string, unknown>; required?: string[] } {
     if (this.isZodObjectSchema(this.schema)) {
       return this.generateSchemaFromZodObject(this.schema);
-    } else {
-      return this.generateSchemaFromLegacyFormat(this.schema as ToolInputSchema<TInput>);
     }
+
+    // Check for common mistake: plain object with Zod types instead of z.object()
+    if (typeof this.schema === 'object' && this.schema !== null && !this.isZodObjectSchema(this.schema)) {
+      const entries = Object.entries(this.schema as Record<string, any>);
+      const hasRawZodValues = entries.some(([_, value]) => {
+        return value instanceof z.ZodType && !('type' in value && 'description' in value);
+      });
+
+      if (hasRawZodValues) {
+        throw new Error(
+          `Invalid schema format in tool "${this.name}". ` +
+          `It looks like you passed a plain object with Zod types. ` +
+          `Use z.object() instead:\n\n` +
+          `  // Wrong:\n` +
+          `  schema = { field: z.string() }\n\n` +
+          `  // Correct:\n` +
+          `  schema = z.object({\n` +
+          `    field: z.string().describe("Field description")\n` +
+          `  })`
+        );
+      }
+    }
+
+    return this.generateSchemaFromLegacyFormat(this.schema as ToolInputSchema<TInput>);
   }
 
   private generateSchemaFromZodObject(zodSchema: z.ZodObject<any>): {

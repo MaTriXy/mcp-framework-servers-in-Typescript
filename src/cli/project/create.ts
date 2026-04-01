@@ -208,25 +208,19 @@ server.start();`;
 
     // Generate example tool (OAuth-aware if OAuth is enabled)
     const exampleToolTs = options?.oauth
-      ? `import { MCPTool } from "mcp-framework";
+      ? `import { MCPTool, MCPInput } from "mcp-framework";
 import { z } from "zod";
 
-interface ExampleInput {
-  message: string;
-}
+const schema = z.object({
+  message: z.string().describe("Message to process"),
+});
 
-class ExampleTool extends MCPTool<ExampleInput> {
+class ExampleTool extends MCPTool {
   name = "example_tool";
   description = "An example authenticated tool that processes messages";
+  schema = schema;
 
-  schema = {
-    message: {
-      type: z.string(),
-      description: "Message to process",
-    },
-  };
-
-  async execute(input: ExampleInput, context?: any) {
+  async execute(input: MCPInput<this>, context?: any) {
     // Access authentication claims from OAuth token
     const claims = context?.auth?.data;
     const userId = claims?.sub || 'unknown';
@@ -239,25 +233,19 @@ Token scope: \${scope}\`;
 }
 
 export default ExampleTool;`
-      : `import { MCPTool } from "mcp-framework";
+      : `import { MCPTool, MCPInput } from "mcp-framework";
 import { z } from "zod";
 
-interface ExampleInput {
-  message: string;
-}
+const schema = z.object({
+  message: z.string().describe("Message to process"),
+});
 
-class ExampleTool extends MCPTool<ExampleInput> {
+class ExampleTool extends MCPTool {
   name = "example_tool";
   description = "An example tool that processes messages";
+  schema = schema;
 
-  schema = {
-    message: {
-      type: z.string(),
-      description: "Message to process",
-    },
-  };
-
-  async execute(input: ExampleInput) {
+  async execute(input: MCPInput<this>) {
     return \`Processed: \${input.message}\`;
   }
 }
