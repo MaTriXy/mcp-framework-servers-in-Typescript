@@ -33,6 +33,14 @@ export interface CORSConfig {
    * @default "86400"
    */
   maxAge?: string;
+
+  /**
+   * List of allowed origins for Origin header validation.
+   * If not set, all origins are allowed (backwards compatible).
+   * When set, requests with non-matching Origin headers receive 403.
+   * Requests without an Origin header (non-browser clients) are always allowed.
+   */
+  allowedOrigins?: string[];
 }
 
 /**
@@ -43,6 +51,12 @@ export interface SSETransportConfig {
    * Port to listen on
    */
   port?: number;
+
+  /**
+   * Host/address to bind to
+   * @default "127.0.0.1"
+   */
+  host?: string;
 
   /**
    * Endpoint for SSE events stream
@@ -105,11 +119,12 @@ export interface SSETransportConfig {
 /**
  * Internal configuration type with required fields except headers
  */
-export type SSETransportConfigInternal = Required<Omit<SSETransportConfig, 'headers' | 'auth' | 'cors' | 'oauth'>> & {
+export type SSETransportConfigInternal = Required<Omit<SSETransportConfig, 'headers' | 'auth' | 'cors' | 'oauth' | 'host'>> & {
   headers?: Record<string, string>;
   auth?: AuthConfig;
   cors?: CORSConfig;
   oauth?: SSETransportConfig['oauth'];
+  host?: string;
 };
 
 /**

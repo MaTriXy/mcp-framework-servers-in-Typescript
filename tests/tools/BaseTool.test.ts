@@ -120,7 +120,8 @@ describe('BaseTool', () => {
         });
 
         expect(response.content).toHaveLength(1);
-        expect(response.content[0].type).toBe('error');
+        expect(response.content[0].type).toBe('text');
+        expect(response.isError).toBe(true);
         expect((response.content[0] as any).text).toContain('Required');
       });
 
@@ -132,7 +133,8 @@ describe('BaseTool', () => {
         });
 
         expect(response.content).toHaveLength(1);
-        expect(response.content[0].type).toBe('error');
+        expect(response.content[0].type).toBe('text');
+        expect(response.isError).toBe(true);
       });
     });
 
@@ -310,7 +312,8 @@ describe('BaseTool', () => {
       });
 
       expect(response.content).toHaveLength(1);
-      expect(response.content[0].type).toBe('error');
+      expect(response.content[0].type).toBe('text');
+      expect(response.isError).toBe(true);
     });
 
     it('should reject negative numbers for positive constraints', async () => {
@@ -324,7 +327,8 @@ describe('BaseTool', () => {
       });
 
       expect(response.content).toHaveLength(1);
-      expect(response.content[0].type).toBe('error');
+      expect(response.content[0].type).toBe('text');
+      expect(response.isError).toBe(true);
     });
   });
 
@@ -518,7 +522,8 @@ describe('BaseTool', () => {
           ],
           maxTokens: 100,
         });
-        return { sampledText: result.content.text };
+        const content = result.content;
+        return { sampledText: content.type === 'text' ? content.text : '' };
       }
 
       // Expose protected method for testing
@@ -539,7 +544,7 @@ describe('BaseTool', () => {
         { name: 'test-server', version: '1.0.0' },
         { capabilities: {} },
       ) as jest.Mocked<Server>;
-      mockServer.createMessage = jest.fn();
+      (mockServer as any).createMessage = jest.fn();
     });
 
     it('should inject server without throwing', () => {

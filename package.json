@@ -51,7 +51,7 @@
     "url": "https://github.com/QuantGeekDev/mcp-framework.git"
   },
   "peerDependencies": {
-    "@modelcontextprotocol/sdk": "^1.11.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "3.x"
   },
   "dependencies": {
@@ -66,10 +66,11 @@
     "prompts": "^2.4.2",
     "raw-body": "^2.5.2",
     "typescript": "^5.3.3",
-    "zod": "^3.23.8"
+    "zod": "3.x"
   },
   "devDependencies": {
     "@eslint/js": "^9.23.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/content-type": "^1.1.8",
     "@types/jest": "^29.5.12",
     "@types/jsonwebtoken": "^9.0.8",

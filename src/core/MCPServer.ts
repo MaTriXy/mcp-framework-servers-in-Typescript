@@ -10,6 +10,8 @@ import {
   SubscribeRequestSchema,
   UnsubscribeRequestSchema,
   CompleteRequestSchema,
+  SetLevelRequestSchema,
+  CancelledNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { ToolProtocol } from '../tools/BaseTool.js';
 import { PromptProtocol } from '../prompts/BasePrompt.js';
@@ -31,6 +33,14 @@ import { AuthConfig } from '../auth/types.js';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+
+export type MCPLogLevel = 'debug' | 'info' | 'notice' | 'warning' | 'error' | 'critical' | 'alert' | 'emergency';
+
+export const LOG_LEVEL_SEVERITY: Record<MCPLogLevel, number> = {
+  debug: 0, info: 1, notice: 2, warning: 3,
+  error: 4, critical: 5, alert: 6, emergency: 7,
+};
+
 export type TransportType = 'stdio' | 'sse' | 'http-stream';
 
 export interface TransportConfig {
@@ -44,6 +54,7 @@ export interface MCPServerConfig {
   version?: string;
   basePath?: string;
   transport?: TransportConfig;
+  logging?: boolean;
 }
 
 export type ServerCapabilities = {
@@ -58,6 +69,7 @@ export type ServerCapabilities = {
     subscribe?: true;
   };
   completions?: {};
+  logging?: {};
 };
 
 export class MCPServer {
@@ -77,12 +89,16 @@ export class MCPServer {
   private transport?: BaseTransport;
   private shutdownPromise?: Promise<void>;
   private shutdownResolve?: () => void;
+  private _logLevel: MCPLogLevel = 'warning';
+  private _loggingEnabled: boolean = false;
+  private _inFlightAbortControllers = new Map<string | number, AbortController>();
 
   constructor(config: MCPServerConfig = {}) {
     this.basePath = this.resolveBasePath(config.basePath);
     this.serverName = config.name ?? this.getDefaultName();
     this.serverVersion = config.version ?? this.getDefaultVersion();
     this.transportConfig = config.transport ?? { type: 'stdio' };
+    this._loggingEnabled = config.logging ?? false;
 
     if (this.transportConfig.auth && this.transportConfig.options) {
       (this.transportConfig.options as any).auth = this.transportConfig.auth;
@@ -253,7 +269,7 @@ export class MCPServer {
       return response;
     });
 
-    targetServer.setRequestHandler(CallToolRequestSchema, async (request: any) => {
+    targetServer.setRequestHandler(CallToolRequestSchema, async (request: any, extra: any) => {
       logger.debug(`Tool call request received for: ${request.params.name}`);
       logger.debug(`Tool call arguments: ${JSON.stringify(request.params.arguments)}`);
 
@@ -272,9 +288,20 @@ export class MCPServer {
           method: 'tools/call' as const,
         };
 
-        const result = await tool.toolCall(toolRequest);
-        logger.debug(`Tool execution successful: ${JSON.stringify(result)}`);
-        return result;
+        // Set progress token and abort signal from the SDK extra context
+        const progressToken = request.params?._meta?.progressToken;
+        const abortSignal = extra?.signal as AbortSignal | undefined;
+        tool.setProgressToken(progressToken);
+        tool.setAbortSignal(abortSignal);
+
+        try {
+          const result = await tool.toolCall(toolRequest);
+          logger.debug(`Tool execution successful: ${JSON.stringify(result)}`);
+          return result;
+        } finally {
+          tool.setProgressToken(undefined);
+          tool.setAbortSignal(undefined);
+        }
       } catch (error) {
         const errorMsg = `Tool execution failed: ${error}`;
         logger.error(errorMsg);
@@ -399,6 +426,30 @@ export class MCPServer {
         return { completion: { values: [] } };
       });
     }
+
+    if (this.capabilities.logging) {
+      targetServer.setRequestHandler(SetLevelRequestSchema, async (request: any) => {
+        const level = request.params.level as MCPLogLevel;
+        if (!LOG_LEVEL_SEVERITY.hasOwnProperty(level)) {
+          throw new Error(`Invalid log level: ${level}`);
+        }
+        this._logLevel = level;
+        logger.info(`MCP log level set to: ${level}`);
+        return {};
+      });
+    }
+
+    targetServer.setNotificationHandler(CancelledNotificationSchema, async (notification: any) => {
+      const requestId = notification.params.requestId;
+      if (requestId != null) {
+        const controller = this._inFlightAbortControllers.get(requestId);
+        if (controller) {
+          controller.abort(notification.params.reason ?? 'Request cancelled');
+          this._inFlightAbortControllers.delete(requestId);
+          logger.info(`Request ${requestId} cancelled: ${notification.params.reason ?? 'no reason'}`);
+        }
+      }
+    });
   }
 
   private async detectCapabilities(): Promise<ServerCapabilities> {
@@ -415,6 +466,11 @@ export class MCPServer {
     if (await this.resourceLoader.hasResources()) {
       this.capabilities.resources = {};
       logger.debug('Resources capability enabled');
+    }
+
+    if (this._loggingEnabled) {
+      this.capabilities.logging = {};
+      logger.debug('Logging capability enabled');
     }
 
     if (this.capabilities.prompts || this.capabilities.resources) {
@@ -607,5 +663,39 @@ export class MCPServer {
 
   get IsRunning(): boolean {
     return this.isRunning;
+  }
+
+  /**
+   * Query the client for its filesystem root boundaries.
+   * Returns an empty array if the client doesn't support roots.
+   */
+  public async listRoots(): Promise<Array<{ uri: string; name?: string }>> {
+    if (!this.server) return [];
+    try {
+      const result = await this.server.listRoots();
+      return result.roots ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Send a logging message to the client via the MCP logging protocol.
+   * Messages below the current log level threshold will be silently dropped.
+   */
+  public async sendLog(level: MCPLogLevel, loggerName: string, data: unknown): Promise<void> {
+    if (!this._loggingEnabled || !this.server) return;
+    if (LOG_LEVEL_SEVERITY[level] < LOG_LEVEL_SEVERITY[this._logLevel]) return;
+
+    try {
+      await this.server.sendLoggingMessage({
+        level,
+        logger: loggerName,
+        data,
+      });
+    } catch (error) {
+      // Don't throw on logging failures
+      logger.debug(`Failed to send log message: ${error}`);
+    }
   }
 }

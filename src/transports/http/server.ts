@@ -9,6 +9,7 @@ import { logger } from '../../core/Logger.js';
 import { ProtectedResourceMetadata } from '../../auth/metadata/protected-resource.js';
 import { handleAuthentication } from '../utils/auth-handler.js';
 import { initializeOAuthMetadata } from '../utils/oauth-metadata.js';
+import { validateOrigin } from '../utils/origin-validator.js';
 import { requestContext, RequestContextData } from '../../utils/requestContext.js';
 import { AuthResult } from '../../auth/types.js';
 
@@ -61,6 +62,11 @@ export class HttpStreamTransport extends AbstractTransport {
         try {
           const url = new URL(req.url!, `http://${req.headers.host}`);
 
+          // Validate Origin header for DNS rebinding protection (MCP spec 2025-11-25)
+          if (!validateOrigin(req, res, { allowedOrigins: this._config.cors?.allowedOrigins })) {
+            return;
+          }
+
           if (req.method === 'OPTIONS') {
             this.setCorsHeaders(res, true);
             res.writeHead(204).end();
@@ -105,8 +111,9 @@ export class HttpStreamTransport extends AbstractTransport {
         this._onclose?.();
       });
 
-      this._server.listen(this._port, () => {
-        logger.info(`HTTP server listening on port ${this._port}, endpoint ${this._endpoint}`);
+      const host = this._config.host ?? '127.0.0.1';
+      this._server.listen(this._port, host, () => {
+        logger.info(`HTTP server listening on ${host}:${this._port}, endpoint ${this._endpoint}`);
         this._isRunning = true;
         resolve();
       });

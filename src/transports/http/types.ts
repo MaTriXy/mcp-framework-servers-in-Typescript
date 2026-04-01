@@ -59,6 +59,12 @@ export interface HttpStreamTransportConfig {
   port?: number;
 
   /**
+   * Host/address to bind to
+   * @default "127.0.0.1"
+   */
+  host?: string;
+
+  /**
    * Endpoint path for MCP communication, defaults to "/mcp"
    */
   endpoint?: string;

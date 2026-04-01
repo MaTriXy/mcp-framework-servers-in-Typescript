@@ -1,8 +1,36 @@
 import { z } from 'zod';
-import { CreateMessageRequest, CreateMessageResult, Tool as SDKTool } from '@modelcontextprotocol/sdk/types.js';
+import { CreateMessageRequest, CreateMessageResult, CreateMessageResultWithTools, CreateMessageRequestParamsWithTools, Tool as SDKTool, ToolChoice, ElicitResult, ElicitRequestFormParams, ElicitRequestURLParams } from '@modelcontextprotocol/sdk/types.js';
 import { ImageContent } from '../transports/utils/image-handler.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
+
+/**
+ * Schema definition for a single field in an elicitation form.
+ * Only flat objects with primitive properties are supported per the MCP spec.
+ */
+export type ElicitationFieldSchema = {
+  /** Mark this field as not required. Defaults to required if omitted. */
+  optional?: boolean;
+} & (
+  | { type: 'string'; title?: string; description?: string;
+      minLength?: number; maxLength?: number;
+      format?: 'email' | 'uri' | 'date' | 'date-time';
+      default?: string }
+  | { type: 'string'; title?: string; description?: string;
+      enum: string[]; default?: string }
+  | { type: 'string'; title?: string; description?: string;
+      oneOf: { const: string; title: string }[]; default?: string }
+  | { type: 'number' | 'integer'; title?: string; description?: string;
+      minimum?: number; maximum?: number; default?: number }
+  | { type: 'boolean'; title?: string; description?: string;
+      default?: boolean }
+  | { type: 'array'; title?: string; description?: string;
+      minItems?: number; maxItems?: number;
+      items: { type: 'string'; enum: string[] } | { anyOf: { const: string; title: string }[] };
+      default?: string[] }
+);
+
+export { ElicitResult, ElicitRequestFormParams, ElicitRequestURLParams };
 
 export type ToolInputSchema<T> = {
   [K in keyof T]: {
@@ -28,15 +56,64 @@ export type MCPInput<T extends MCPTool<any, any> = MCPTool<any, any>> = InferSch
   T['schema']
 >;
 
+export interface MCPIcon {
+  src: string;
+  mimeType?: string;
+  sizes?: string[];
+}
+
+export interface ToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
+export interface ContentAnnotations {
+  audience?: ('user' | 'assistant')[];
+  priority?: number;
+  lastModified?: string;
+}
+
 export type TextContent = {
   type: 'text';
   text: string;
+  annotations?: ContentAnnotations;
 };
 
-export type ToolContent = TextContent | ImageContent;
+export interface AudioContent {
+  type: 'audio';
+  data: string;
+  mimeType: string;
+  annotations?: ContentAnnotations;
+}
+
+export interface ResourceLinkContent {
+  type: 'resource_link';
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+  annotations?: ContentAnnotations;
+}
+
+export interface EmbeddedResourceContent {
+  type: 'resource';
+  resource: {
+    uri: string;
+    mimeType?: string;
+    text?: string;
+    blob?: string;
+    annotations?: ContentAnnotations;
+  };
+}
+
+export type ToolContent = TextContent | ImageContent | AudioContent | ResourceLinkContent | EmbeddedResourceContent;
 
 export type ToolResponse = {
   content: ToolContent[];
+  structuredContent?: Record<string, unknown>;
   isError?: boolean;
 };
 
@@ -48,14 +125,20 @@ export interface ToolProtocol extends SDKTool {
     description: string;
     inputSchema: {
       type: 'object';
-      properties?: Record<string, unknown>;
+      properties?: Record<string, object>;
       required?: string[];
     };
+    title?: string;
+    icons?: MCPIcon[];
+    annotations?: ToolAnnotations;
+    outputSchema?: Record<string, unknown>;
   };
   toolCall(request: {
     params: { name: string; arguments?: Record<string, unknown> };
   }): Promise<ToolResponse>;
   injectServer(server: Server): void;
+  setProgressToken(token?: string | number): void;
+  setAbortSignal(signal?: AbortSignal): void;
 }
 
 /**
@@ -90,9 +173,15 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       ? TSchema
       : z.ZodObject<any> | ToolInputSchema<TInput>;
   protected useStringify: boolean = true;
+  title?: string;
+  icons?: MCPIcon[];
+  annotations?: ToolAnnotations;
+  protected _outputSchema?: z.ZodObject<any>;
   [key: string]: unknown;
 
   private server: Server | undefined;
+  private _currentProgressToken?: string | number;
+  private _currentAbortSignal?: AbortSignal;
 
   /**
    * Injects the server into this tool to allow sampling requests.
@@ -104,6 +193,135 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       return;
     }
     this.server = server;
+  }
+
+  /**
+   * Sets the progress token for the current tool invocation.
+   * Called by MCPServer before and after tool execution.
+   */
+  public setProgressToken(token?: string | number): void {
+    this._currentProgressToken = token;
+  }
+
+  /**
+   * Sets the abort signal for the current tool invocation.
+   * Called by MCPServer before and after tool execution.
+   */
+  public setAbortSignal(signal?: AbortSignal): void {
+    this._currentAbortSignal = signal;
+  }
+
+  /**
+   * Returns the abort signal for the current tool invocation, if available.
+   * Tools can check this signal to detect cancellation and abort long-running work.
+   *
+   * @example
+   * ```typescript
+   * async execute(input: MCPInput<this>) {
+   *   for (const item of items) {
+   *     if (this.abortSignal?.aborted) {
+   *       return "Operation cancelled";
+   *     }
+   *     await processItem(item);
+   *   }
+   * }
+   * ```
+   */
+  protected get abortSignal(): AbortSignal | undefined {
+    return this._currentAbortSignal;
+  }
+
+  /**
+   * Report progress for the current tool invocation.
+   * Only sends a notification if a progress token was provided by the client.
+   *
+   * @param progress - Current progress value
+   * @param total - Optional total value for progress calculation
+   * @param message - Optional human-readable progress message
+   *
+   * @example
+   * ```typescript
+   * async execute(input: MCPInput<this>) {
+   *   for (let i = 0; i < items.length; i++) {
+   *     await this.reportProgress(i, items.length, `Processing item ${i + 1}`);
+   *     await processItem(items[i]);
+   *   }
+   * }
+   * ```
+   */
+  protected async reportProgress(progress: number, total?: number, message?: string): Promise<void> {
+    if (this._currentProgressToken == null || !this.server) return;
+
+    try {
+      await this.server.notification({
+        method: 'notifications/progress',
+        params: {
+          progressToken: this._currentProgressToken,
+          progress,
+          ...(total != null && { total }),
+          ...(message != null && { message }),
+        },
+      });
+    } catch {
+      // Don't fail tool execution because of progress notification errors
+    }
+  }
+
+  /**
+   * Send a logging message to the client via the MCP logging protocol.
+   * Uses the SDK server's sendLoggingMessage method if available.
+   *
+   * @param level - The log level (debug, info, notice, warning, error, critical, alert, emergency)
+   * @param data - The data to log (string, object, etc.)
+   * @param loggerName - Optional logger name; defaults to this tool's name
+   *
+   * @example
+   * ```typescript
+   * async execute(input: MCPInput<this>) {
+   *   await this.log('info', 'Starting processing');
+   *   await this.log('debug', { step: 1, data: input });
+   * }
+   * ```
+   */
+  protected async log(
+    level: 'debug' | 'info' | 'notice' | 'warning' | 'error' | 'critical' | 'alert' | 'emergency',
+    data: unknown,
+    loggerName?: string,
+  ): Promise<void> {
+    if (!this.server) return;
+    try {
+      await (this.server as any).sendLoggingMessage?.({
+        level,
+        logger: loggerName ?? this.name,
+        data,
+      });
+    } catch {
+      // Silently ignore logging failures during tool execution
+    }
+  }
+
+  /**
+   * Query the client for its filesystem root boundaries.
+   * Returns an empty array if the client doesn't support roots or the server isn't connected.
+   *
+   * @example
+   * ```typescript
+   * async execute(input: MCPInput<this>) {
+   *   const roots = await this.getRoots();
+   *   for (const root of roots) {
+   *     console.log(`Root: ${root.uri} (${root.name})`);
+   *   }
+   * }
+   * ```
+   */
+  protected async getRoots(): Promise<Array<{ uri: string; name?: string }>> {
+    if (!this.server) return [];
+    try {
+      const result = await (this.server as any).listRoots?.();
+      return result?.roots ?? [];
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -133,6 +351,114 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
   }
 
   /**
+   * Request structured input from the user via form-based elicitation.
+   * Can only be called from within a tool's execute() method after the server
+   * has been injected. The client must support elicitation capabilities.
+   *
+   * Only flat objects with primitive properties are supported per the MCP spec.
+   * Do NOT request sensitive data (passwords, API keys) via form mode — use
+   * elicitUrl() for sensitive data instead.
+   *
+   * @param message A human-readable message explaining why the input is needed.
+   * @param schema  A record of field names to their schema definitions.
+   * @param options Optional request options (timeout, signal, etc.).
+   * @returns The elicitation result with action ('accept', 'decline', 'cancel') and optional content.
+   *
+   * @example
+   * ```typescript
+   * const result = await this.elicit("Please provide your details", {
+   *   name: { type: "string", description: "Your full name" },
+   *   age: { type: "number", description: "Your age", minimum: 18 }
+   * });
+   *
+   * if (result.action === 'accept') {
+   *   console.log(result.content?.name);
+   * }
+   * ```
+   */
+  protected async elicit(
+    message: string,
+    schema: Record<string, ElicitationFieldSchema>,
+    options?: RequestOptions,
+  ): Promise<ElicitResult> {
+    if (!this.server) {
+      throw new Error(
+        `Cannot elicit input: server not available in tool '${this.name}'. ` +
+        `Elicitation is only available during tool execution within an MCPServer.`,
+      );
+    }
+
+    const required: string[] = [];
+    const properties: Record<string, object> = {};
+
+    for (const [key, field] of Object.entries(schema)) {
+      const { optional: isOptional, ...jsonSchema } = field;
+      properties[key] = jsonSchema;
+      if (!isOptional) {
+        required.push(key);
+      }
+    }
+
+    return this.server.elicitInput({
+      mode: 'form',
+      message,
+      requestedSchema: {
+        type: 'object',
+        properties,
+        ...(required.length > 0 ? { required } : {}),
+      },
+    } as ElicitRequestFormParams, options);
+  }
+
+  /**
+   * Request the user to visit a URL for sensitive out-of-band interaction.
+   * Use this for passwords, OAuth flows, payments, or anything that should NOT
+   * pass through the MCP client.
+   *
+   * The client will ask the user for consent before opening the URL.
+   * An 'accept' response means the user agreed to open the URL, NOT that
+   * the interaction is complete.
+   *
+   * @param message        A human-readable message explaining why the URL visit is needed.
+   * @param url            The URL the user should navigate to.
+   * @param elicitationId  A unique identifier for this elicitation (used for completion notifications).
+   * @param options        Optional request options (timeout, signal, etc.).
+   * @returns The elicitation result with action ('accept', 'decline', 'cancel').
+   *
+   * @example
+   * ```typescript
+   * const result = await this.elicitUrl(
+   *   "Please authorize access to your account",
+   *   "https://auth.example.com/authorize?state=abc123",
+   *   "auth-flow-abc123"
+   * );
+   *
+   * if (result.action === 'accept') {
+   *   // User agreed to open the URL — wait for completion
+   * }
+   * ```
+   */
+  protected async elicitUrl(
+    message: string,
+    url: string,
+    elicitationId: string,
+    options?: RequestOptions,
+  ): Promise<ElicitResult> {
+    if (!this.server) {
+      throw new Error(
+        `Cannot elicit input: server not available in tool '${this.name}'. ` +
+        `Elicitation is only available during tool execution within an MCPServer.`,
+      );
+    }
+    return this.server.elicitInput({
+      mode: 'url',
+      message,
+      url,
+      elicitationId,
+    } as ElicitRequestURLParams, options);
+  }
+
+  /**
    * Validates the tool schema. This is called automatically when the tool is registered
    * with an MCP server, but can also be called manually for testing.
    */
@@ -147,7 +473,7 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
     return schema instanceof z.ZodObject;
   }
 
-  get inputSchema(): { type: 'object'; properties?: Record<string, unknown>; required?: string[] } {
+  get inputSchema(): { type: 'object'; properties?: Record<string, object>; required?: string[] } {
     if (this.isZodObjectSchema(this.schema)) {
       return this.generateSchemaFromZodObject(this.schema);
     }
@@ -179,11 +505,11 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
 
   private generateSchemaFromZodObject(zodSchema: z.ZodObject<any>): {
     type: 'object';
-    properties: Record<string, unknown>;
+    properties: Record<string, object>;
     required: string[];
   } {
     const shape = zodSchema.shape;
-    const properties: Record<string, any> = {};
+    const properties: Record<string, object> = {};
     const required: string[] = [];
     const missingDescriptions: string[] = [];
 
@@ -393,10 +719,10 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
 
   private generateSchemaFromLegacyFormat(schema: ToolInputSchema<TInput>): {
     type: 'object';
-    properties: Record<string, unknown>;
+    properties: Record<string, object>;
     required?: string[];
   } {
-    const properties: Record<string, unknown> = {};
+    const properties: Record<string, object> = {};
     const required: string[] = [];
 
     Object.entries(schema).forEach(([key, fieldSchema]) => {
@@ -415,7 +741,7 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
 
     const inputSchema: {
       type: 'object';
-      properties: Record<string, unknown>;
+      properties: Record<string, object>;
       required?: string[];
     } = {
       type: 'object',
@@ -434,6 +760,31 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       name: this.name,
       description: this.description,
       inputSchema: this.inputSchema,
+      ...(this.title && { title: this.title }),
+      ...(this.icons && this.icons.length > 0 && { icons: this.icons }),
+      ...(this.annotations && Object.keys(this.annotations).length > 0 && { annotations: this.annotations }),
+      ...(this._outputSchema && { outputSchema: this.generateOutputSchema() }),
+    };
+  }
+
+  private generateOutputSchema(): Record<string, unknown> {
+    if (!this._outputSchema) return {};
+    const shape = this._outputSchema.shape;
+    const properties: Record<string, any> = {};
+    const required: string[] = [];
+
+    for (const [key, value] of Object.entries(shape)) {
+      const fieldInfo = this.extractFieldInfo(value as z.ZodTypeAny);
+      properties[key] = fieldInfo.jsonSchema;
+      if (!fieldInfo.isOptional) {
+        required.push(key);
+      }
+    }
+
+    return {
+      type: 'object' as const,
+      properties,
+      ...(required.length > 0 && { required }),
     };
   }
 
@@ -450,7 +801,22 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       const result = await this.execute(
         validatedInput as TSchema extends z.ZodObject<any> ? z.infer<TSchema> : TInput
       );
-      return this.createSuccessResponse(result);
+      const response = this.createSuccessResponse(result);
+
+      // If tool has outputSchema and result is a plain object, add structuredContent
+      if (this._outputSchema && result !== null && typeof result === 'object' && !Array.isArray(result) && !this.isValidContent(result)) {
+        try {
+          const validated = this._outputSchema.parse(result);
+          return {
+            ...response,
+            structuredContent: validated as Record<string, unknown>,
+          };
+        } catch {
+          // Output validation failed - return as regular content
+        }
+      }
+
+      return response;
     } catch (error) {
       return this.createErrorResponse(error as Error);
     }
@@ -488,7 +854,8 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
   }
 
   protected createSuccessResponse(data: unknown): ToolResponse {
-    if (this.isImageContent(data)) {
+    if (this.isImageContent(data) || this.isAudioContent(data) ||
+        this.isResourceLinkContent(data) || this.isEmbeddedResourceContent(data)) {
       return {
         content: [data],
       };
@@ -544,8 +911,35 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
     );
   }
 
+  private isAudioContent(value: unknown): value is AudioContent {
+    return (
+      typeof value === 'object' && value !== null &&
+      'type' in value && (value as any).type === 'audio' &&
+      'data' in value && typeof (value as any).data === 'string' &&
+      'mimeType' in value && typeof (value as any).mimeType === 'string'
+    );
+  }
+
+  private isResourceLinkContent(value: unknown): value is ResourceLinkContent {
+    return (
+      typeof value === 'object' && value !== null &&
+      'type' in value && (value as any).type === 'resource_link' &&
+      'uri' in value && typeof (value as any).uri === 'string'
+    );
+  }
+
+  private isEmbeddedResourceContent(value: unknown): value is EmbeddedResourceContent {
+    return (
+      typeof value === 'object' && value !== null &&
+      'type' in value && (value as any).type === 'resource' &&
+      'resource' in value && typeof (value as any).resource === 'object'
+    );
+  }
+
   private isValidContent(data: unknown): data is ToolContent {
-    return this.isImageContent(data) || this.isTextContent(data);
+    return this.isImageContent(data) || this.isTextContent(data) ||
+           this.isAudioContent(data) || this.isResourceLinkContent(data) ||
+           this.isEmbeddedResourceContent(data);
   }
 
   protected async fetch<T>(url: string, init?: RequestInit): Promise<T> {

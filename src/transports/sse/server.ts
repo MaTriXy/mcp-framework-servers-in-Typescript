@@ -11,6 +11,7 @@ import { PING_SSE_MESSAGE } from "../utils/ping-message.js";
 import { ProtectedResourceMetadata } from "../../auth/metadata/protected-resource.js";
 import { handleAuthentication } from "../utils/auth-handler.js";
 import { initializeOAuthMetadata } from "../utils/oauth-metadata.js";
+import { validateOrigin } from "../utils/origin-validator.js";
 import { requestContext, RequestContextData } from "../../utils/requestContext.js";
 import { AuthResult } from "../../auth/types.js";
 
@@ -97,8 +98,9 @@ export class SSEServerTransport extends AbstractTransport {
         }
       })
 
-      this._server.listen(this._config.port, () => {
-        logger.info(`SSE transport listening on port ${this._config.port}`)
+      const host = this._config.host ?? '127.0.0.1';
+      this._server.listen(this._config.port, host, () => {
+        logger.info(`SSE transport listening on ${host}:${this._config.port}`)
         resolve()
       })
 
@@ -116,6 +118,11 @@ export class SSEServerTransport extends AbstractTransport {
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     logger.debug(`Incoming request: ${req.method} ${req.url}`)
+
+    // Validate Origin header for DNS rebinding protection (MCP spec 2025-11-25)
+    if (!validateOrigin(req, res, { allowedOrigins: this._config.cors?.allowedOrigins })) {
+      return
+    }
 
     if (req.method === "OPTIONS") {
       setResponseHeaders(res, this.getCorsHeaders(true))

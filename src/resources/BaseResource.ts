@@ -1,4 +1,5 @@
 import { CompletionResult } from '../prompts/BasePrompt.js';
+import { MCPIcon, ContentAnnotations } from '../tools/BaseTool.js';
 
 export type ResourceContent = {
   uri: string;
@@ -12,6 +13,10 @@ export type ResourceDefinition = {
   name: string;
   description?: string;
   mimeType?: string;
+  title?: string;
+  icons?: MCPIcon[];
+  size?: number;
+  annotations?: ContentAnnotations;
 };
 
 export type ResourceTemplateDefinition = {
@@ -19,6 +24,8 @@ export type ResourceTemplateDefinition = {
   name: string;
   description?: string;
   mimeType?: string;
+  title?: string;
+  icons?: MCPIcon[];
 };
 
 export interface ResourceProtocol {
@@ -39,6 +46,10 @@ export abstract class MCPResource implements ResourceProtocol {
   abstract name: string;
   description?: string;
   mimeType?: string;
+  protected title?: string;
+  protected icons?: MCPIcon[];
+  protected size?: number;
+  protected resourceAnnotations?: ContentAnnotations;
 
   protected template?: {
     uriTemplate: string;
@@ -51,6 +62,10 @@ export abstract class MCPResource implements ResourceProtocol {
       name: this.name,
       description: this.description,
       mimeType: this.mimeType,
+      ...(this.title && { title: this.title }),
+      ...(this.icons && this.icons.length > 0 && { icons: this.icons }),
+      ...(this.size !== undefined && { size: this.size }),
+      ...(this.resourceAnnotations && Object.keys(this.resourceAnnotations).length > 0 && { annotations: this.resourceAnnotations }),
     };
   }
 
@@ -61,6 +76,8 @@ export abstract class MCPResource implements ResourceProtocol {
       name: this.name,
       description: this.template.description ?? this.description,
       mimeType: this.mimeType,
+      ...(this.title && { title: this.title }),
+      ...(this.icons && this.icons.length > 0 && { icons: this.icons }),
     };
   }
 
