@@ -8,6 +8,25 @@ export * from './prompts/BasePrompt.js';
 
 export * from './auth/index.js';
 
+// Apps
+export { MCPApp } from './apps/BaseApp.js';
+export type { AppUIConfig } from './apps/BaseApp.js';
+export {
+  MCP_APP_MIME_TYPE,
+  MCP_APP_URI_SCHEME,
+  MCP_APP_EXTENSION_ID,
+} from './apps/types.js';
+export type {
+  AppProtocol,
+  AppToolDefinition,
+  ToolAppConfig,
+  AppCSPConfig,
+  AppPermissionsConfig,
+  AppUIResourceMeta,
+  AppToolMeta,
+  AppToolVisibility,
+} from './apps/types.js';
+
 export type { SSETransportConfig } from './transports/sse/types.js';
 export type { HttpStreamTransportConfig } from './transports/http/types.js';
 export { HttpStreamTransport } from './transports/http/server.js';

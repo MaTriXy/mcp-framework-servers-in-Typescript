@@ -5,6 +5,7 @@ import { createProject } from './project/create.js';
 import { addTool } from './project/add-tool.js';
 import { addPrompt } from './project/add-prompt.js';
 import { addResource } from './project/add-resource.js';
+import { addApp } from './project/add-app.js';
 import { buildFramework } from './framework/build.js';
 import { validateCommand } from './commands/validate.js';
 
@@ -51,6 +52,12 @@ program
       .description('Add a new resource')
       .argument('[name]', 'resource name')
       .action(addResource)
+  )
+  .addCommand(
+    new Command('app')
+      .description('Add a new app with interactive UI')
+      .argument('[name]', 'app name')
+      .action(addApp)
   );
 
 program.addCommand(validateCommand);

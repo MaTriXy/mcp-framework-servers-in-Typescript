@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   CallToolRequestSchema,
@@ -28,6 +29,9 @@ import { logger } from './Logger.js';
 import { ToolLoader } from '../loaders/toolLoader.js';
 import { PromptLoader } from '../loaders/promptLoader.js';
 import { ResourceLoader } from '../loaders/resourceLoader.js';
+import { AppLoader } from '../loaders/appLoader.js';
+import { AppProtocol, AppToolDefinition, MCP_APP_MIME_TYPE, MCP_APP_EXTENSION_ID } from '../apps/types.js';
+import { isAppOnlyTool, warnContentSize } from '../apps/validation.js';
 import { BaseTransport } from '../transports/base.js';
 import { StdioServerTransport } from '../transports/stdio/server.js';
 import { SSEServerTransport } from '../transports/sse/server.js';
@@ -69,6 +73,9 @@ export interface MCPServerConfig {
   transport?: TransportConfig;
   logging?: boolean;
   tasks?: TasksConfig;
+  /** When true, app HTML content is re-read from disk on every resources/read.
+   *  Defaults to true when MCP_DEV_MODE env var is set. */
+  devMode?: boolean;
 }
 
 export type ServerCapabilities = {
@@ -103,6 +110,10 @@ export class MCPServer {
   private toolLoader: ToolLoader;
   private promptLoader: PromptLoader;
   private resourceLoader: ResourceLoader;
+  private appLoader: AppLoader;
+  private appsMap: Map<string, AppProtocol> = new Map();
+  private _hasApps: boolean = false;
+  private appContentCache: Map<string, string> = new Map();
   private serverName: string;
   private serverVersion: string;
   private basePath: string;
@@ -118,6 +129,7 @@ export class MCPServer {
   private _roots: Array<{ uri: string; name?: string }> = [];
   private _tasksConfig?: TasksConfig;
   private _taskManager?: TaskManager;
+  private _devMode: boolean;
 
   constructor(config: MCPServerConfig = {}) {
     this.basePath = this.resolveBasePath(config.basePath);
@@ -126,6 +138,7 @@ export class MCPServer {
     this.transportConfig = config.transport ?? { type: 'stdio' };
     this._loggingEnabled = config.logging ?? false;
     this._tasksConfig = config.tasks;
+    this._devMode = config.devMode ?? !!process.env.MCP_DEV_MODE;
 
     if (this.transportConfig.auth && this.transportConfig.options) {
       (this.transportConfig.options as any).auth = this.transportConfig.auth;
@@ -140,6 +153,7 @@ export class MCPServer {
     this.toolLoader = new ToolLoader(this.basePath);
     this.promptLoader = new PromptLoader(this.basePath);
     this.resourceLoader = new ResourceLoader(this.basePath);
+    this.appLoader = new AppLoader(this.basePath);
   }
 
   private resolveBasePath(configPath?: string): string {
@@ -282,7 +296,13 @@ export class MCPServer {
     targetServer.setRequestHandler(ListToolsRequestSchema, async (request: any) => {
       logger.debug(`Received ListTools request: ${JSON.stringify(request)}`);
 
-      const tools = Array.from(this.toolsMap.values()).map((tool) => tool.toolDefinition);
+      const tools = Array.from(this.toolsMap.values())
+        .filter((tool) => {
+          // Filter out app-only tools (visibility: ["app"]) from the agent's tool list
+          const visibility = (tool as any)._visibility;
+          return !isAppOnlyTool(visibility);
+        })
+        .map((tool) => tool.toolDefinition);
 
       logger.debug(`Found ${tools.length} tools to return`);
       logger.debug(`Tool definitions: ${JSON.stringify(tools)}`);
@@ -637,6 +657,11 @@ export class MCPServer {
       logger.debug('Resources capability enabled');
     }
 
+    if (this._hasApps && !this.capabilities.resources) {
+      this.capabilities.resources = {};
+      logger.debug('Resources capability enabled (via MCP Apps)');
+    }
+
     if (this._loggingEnabled) {
       this.capabilities.logging = {};
       logger.debug('Logging capability enabled');
@@ -694,6 +719,134 @@ export class MCPServer {
     }
   }
 
+  // ── MCP Apps helpers ─────────────────────────────────────────────────────
+
+  private createAppTool(app: AppProtocol, toolDef: AppToolDefinition): ToolProtocol {
+    const meta = app.getToolMeta(toolDef.name);
+    const inputSchema = this.generateAppToolInputSchema(toolDef);
+    const tool = {
+      name: toolDef.name,
+      description: toolDef.description,
+      get toolDefinition() {
+        return {
+          name: toolDef.name,
+          description: toolDef.description,
+          inputSchema,
+          _meta: meta,
+        };
+      },
+      async toolCall(request: { params: { name: string; arguments?: Record<string, unknown> } }) {
+        const args = request.params.arguments || {};
+        const validated = toolDef.schema ? toolDef.schema.parse(args) : args;
+        const result = await toolDef.execute(validated);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: typeof result === 'string' ? result : JSON.stringify(result),
+            },
+          ],
+        };
+      },
+      injectServer() {
+        /* no-op for app tools */
+      },
+      setProgressToken() {
+        /* no-op */
+      },
+      setAbortSignal() {
+        /* no-op */
+      },
+      _visibility: toolDef.visibility,
+    } as unknown as ToolProtocol;
+    return tool;
+  }
+
+  private generateAppToolInputSchema(
+    toolDef: AppToolDefinition,
+  ): { type: 'object'; properties?: Record<string, object>; required?: string[] } {
+    if (!toolDef.schema) return { type: 'object' };
+    try {
+      const shape = toolDef.schema.shape;
+      const properties: Record<string, object> = {};
+      const required: string[] = [];
+      for (const [key, fieldSchema] of Object.entries(shape)) {
+        const fs = fieldSchema as z.ZodTypeAny;
+        const isOptional = fs instanceof z.ZodOptional;
+        const desc = (fs as any)?._def?.description ?? '';
+        properties[key] = { type: 'string', description: desc };
+        if (!isOptional) required.push(key);
+      }
+      return { type: 'object', properties, ...(required.length > 0 && { required }) };
+    } catch {
+      return { type: 'object' };
+    }
+  }
+
+  private createAppResource(app: AppProtocol): ResourceProtocol {
+    const server = this;
+    return {
+      uri: app.ui.resourceUri,
+      name: app.ui.resourceName,
+      description: app.ui.resourceDescription,
+      mimeType: MCP_APP_MIME_TYPE,
+      get resourceDefinition() {
+        return app.resourceDefinition;
+      },
+      async read() {
+        // Use cached content in production mode
+        if (!server._devMode && server.appContentCache.has(app.ui.resourceUri)) {
+          const cached = server.appContentCache.get(app.ui.resourceUri)!;
+          const meta = app.resourceMeta;
+          return [
+            {
+              uri: app.ui.resourceUri,
+              mimeType: MCP_APP_MIME_TYPE,
+              text: cached,
+              ...(meta && { _meta: { ui: meta } }),
+            },
+          ];
+        }
+        // In dev mode or uncached, read fresh
+        try {
+          return await app.readResource();
+        } catch (error: any) {
+          logger.error(`Failed to read app content for "${app.name}": ${error.message}`);
+          return [
+            {
+              uri: app.ui.resourceUri,
+              mimeType: MCP_APP_MIME_TYPE,
+              text: `<!-- Error loading app "${app.name}": ${error.message} -->`,
+            },
+          ];
+        }
+      },
+    } as ResourceProtocol;
+  }
+
+  private createToolAppResource(tool: ToolProtocol): ResourceProtocol {
+    const def = (tool as any).appResourceDefinition!;
+    return {
+      uri: def.uri,
+      name: def.name,
+      description: def.description,
+      mimeType: MCP_APP_MIME_TYPE,
+      get resourceDefinition() {
+        return def;
+      },
+      async read() {
+        const html = await (tool as any).readAppContent();
+        return [
+          {
+            uri: def.uri,
+            mimeType: MCP_APP_MIME_TYPE,
+            text: html,
+          },
+        ];
+      },
+    } as ResourceProtocol;
+  }
+
   async start() {
     try {
       if (this.isRunning) {
@@ -728,12 +881,91 @@ export class MCPServer {
         resources.map((resource: ResourceProtocol) => [resource.uri, resource])
       );
 
+      // Load standalone apps (Mode A)
+      const apps = await this.appLoader.loadApps();
+      for (const app of apps) {
+        try {
+          app.validate();
+          this.appsMap.set(app.name, app);
+
+          // Register each app's tools
+          for (const toolDef of app.tools) {
+            const syntheticTool = this.createAppTool(app, toolDef);
+            this.toolsMap.set(toolDef.name, syntheticTool);
+          }
+
+          // Register the UI resource
+          const syntheticResource = this.createAppResource(app);
+          this.resourcesMap.set(app.ui.resourceUri, syntheticResource);
+
+          logger.debug(`Registered app: ${app.name} with ${app.tools.length} tool(s)`);
+        } catch (error: any) {
+          logger.error(`App validation failed for "${app.name}": ${error.message}`);
+          throw new Error(`App validation failed for "${app.name}": ${error.message}`);
+        }
+      }
+
+      // Register tool-attached app resources (Mode B)
+      for (const tool of tools) {
+        if ((tool as any).hasApp) {
+          const appDef = (tool as any).appResourceDefinition;
+          if (appDef && !this.resourcesMap.has(appDef.uri)) {
+            const resource = this.createToolAppResource(tool as any);
+            this.resourcesMap.set(appDef.uri, resource);
+          }
+        }
+      }
+
+      this._hasApps = this.appsMap.size > 0 || tools.some((t: any) => t.hasApp);
+
+      // Cache app HTML content in production mode
+      if (this._hasApps && !this._devMode) {
+        for (const app of this.appsMap.values()) {
+          try {
+            const html = await app.getContent();
+            warnContentSize(html, app.name);
+            this.appContentCache.set(app.ui.resourceUri, html);
+            logger.debug(
+              `Cached app content: ${app.name} (${Buffer.byteLength(html)} bytes)`,
+            );
+          } catch (error: any) {
+            logger.error(`Failed to load content for app "${app.name}": ${error.message}`);
+            throw new Error(
+              `Failed to load content for app "${app.name}": ${error.message}`,
+            );
+          }
+        }
+        // Cache tool-attached app content too
+        for (const tool of tools) {
+          if ((tool as any).hasApp) {
+            const uri = (tool as any).appResourceDefinition?.uri;
+            if (uri && !this.appContentCache.has(uri)) {
+              try {
+                const html = await (tool as any).readAppContent();
+                this.appContentCache.set(uri, html);
+              } catch (error: any) {
+                logger.error(
+                  `Failed to load app content for tool "${tool.name}": ${error.message}`,
+                );
+                throw new Error(
+                  `Failed to load app content for tool "${tool.name}": ${error.message}`,
+                );
+              }
+            }
+          }
+        }
+      }
+
       await this.detectCapabilities();
       logger.info(`Capabilities detected: ${JSON.stringify(this.capabilities)}`);
 
+      const serverOptions: Record<string, unknown> = { capabilities: this.capabilities };
+      if (this._hasApps) {
+        serverOptions.extensions = { [MCP_APP_EXTENSION_ID]: {} };
+      }
       this.server = new Server(
         { name: this.serverName, version: this.serverVersion },
-        { capabilities: this.capabilities }
+        serverOptions as any,
       );
       tools.forEach((tool) => tool.injectServer(this.server));
       logger.debug(
@@ -760,6 +992,11 @@ export class MCPServer {
       if (this.capabilities.resources) {
         logger.info(
           `Resources (${resources.length}): ${resources.map((r) => r.uri).join(', ') || 'None'}`
+        );
+      }
+      if (this._hasApps) {
+        logger.info(
+          `Apps (${this.appsMap.size}): ${Array.from(this.appsMap.keys()).join(', ') || 'None'}`
         );
       }
 
