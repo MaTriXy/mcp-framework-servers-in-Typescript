@@ -188,7 +188,7 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
     const missingDescriptions: string[] = [];
 
     Object.entries(shape).forEach(([key, fieldSchema]) => {
-      const fieldInfo = this.extractFieldInfo(fieldSchema as z.ZodType);
+      const fieldInfo = this.extractFieldInfo(fieldSchema as z.ZodType, key, missingDescriptions);
 
       if (!fieldInfo.jsonSchema.description) {
         missingDescriptions.push(key);
@@ -216,7 +216,11 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
     };
   }
 
-  private extractFieldInfo(schema: z.ZodType): {
+  private extractFieldInfo(
+    schema: z.ZodType,
+    fieldPath?: string,
+    missingDescriptions?: string[]
+  ): {
     jsonSchema: any;
     isOptional: boolean;
   } {
@@ -279,7 +283,17 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       const nestedRequired: string[] = [];
 
       Object.entries(shape).forEach(([key, fieldSchema]) => {
-        const nestedFieldInfo = this.extractFieldInfo(fieldSchema as z.ZodType);
+        const nestedPath = fieldPath ? `${fieldPath}.${key}` : key;
+        const nestedFieldInfo = this.extractFieldInfo(
+          fieldSchema as z.ZodType,
+          nestedPath,
+          missingDescriptions
+        );
+
+        if (missingDescriptions && !nestedFieldInfo.jsonSchema.description) {
+          missingDescriptions.push(nestedPath);
+        }
+
         nestedProperties[key] = nestedFieldInfo.jsonSchema;
 
         if (!nestedFieldInfo.isOptional) {
