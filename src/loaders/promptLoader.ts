@@ -7,8 +7,8 @@ export class PromptLoader extends BaseLoader<PromptProtocol> {
     super(
       {
         subdirectory: 'prompts',
-        excludedFiles: ['BasePrompt.js', '*.test.js', '*.spec.js'],
-        extensions: ['.js'],
+        excludedFiles: ['BasePrompt.js', 'BasePrompt.ts', '*.test.js', '*.spec.js', '*.test.ts', '*.spec.ts', '*.d.ts'],
+        extensions: ['.js', '.ts'],
       },
       basePath
     );
