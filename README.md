@@ -134,7 +134,7 @@ mcp add prompt price-analysis
 ### Adding a Resource
 
 ```bash
-# Add a new prompt
+# Add a new resource
 mcp add resource market-data
 ```
 
@@ -199,7 +199,7 @@ mcp add resource market-data
 - Use `defineSchema()` during development for immediate feedback
 - Build process automatically catches missing descriptions
 - Server startup validates all tools before accepting connections
-- Use TypeScript's autocomplete with `McpInput<this>` for better DX
+- Use TypeScript's autocomplete with `MCPInput<this>` for better DX
 
 ## Using with Claude Desktop
 
@@ -275,7 +275,7 @@ MCP_DEBUG_CONSOLE=true node dist/index.js
 MCP Framework uses Zod schemas for defining tool inputs, providing type safety, validation, and automatic documentation:
 
 ```typescript
-import { MCPTool, McpInput } from "mcp-framework";
+import { MCPTool, MCPInput } from "mcp-framework";
 import { z } from "zod";
 
 const AddToolSchema = z.object({
@@ -288,7 +288,7 @@ class AddTool extends MCPTool {
   description = "Add tool description";
   schema = AddToolSchema;
 
-  async execute(input: McpInput<this>) {
+  async execute(input: MCPInput<this>) {
     const result = input.a + input.b;
     return `Result: ${result}`;
   }
@@ -310,7 +310,7 @@ export default AddTool;
 The framework supports all Zod features:
 
 ```typescript
-import { MCPTool, McpInput } from "mcp-framework";
+import { MCPTool, MCPInput } from "mcp-framework";
 import { z } from "zod";
 
 const AdvancedSchema = z.object({
@@ -346,7 +346,7 @@ class AdvancedTool extends MCPTool {
   description = "Tool demonstrating advanced Zod features";
   schema = AdvancedSchema;
 
-  async execute(input: McpInput<this>) {
+  async execute(input: MCPInput<this>) {
     // TypeScript automatically knows all the types!
     const { email, name, website, age, rating, tags, metadata, status, category } = input;
     
@@ -362,7 +362,7 @@ class AdvancedTool extends MCPTool {
 
 ### Automatic Type Inference
 
-The `McpInput<this>` type automatically infers the correct input type from your schema, eliminating the need for manual type definitions:
+The `MCPInput<this>` type automatically infers the correct input type from your schema, eliminating the need for manual type definitions:
 
 ```typescript
 class MyTool extends MCPTool {
@@ -372,7 +372,7 @@ class MyTool extends MCPTool {
     tags: z.array(z.string()).describe("User tags")
   });
 
-  async execute(input: McpInput<this>) {
+  async execute(input: MCPInput<this>) {
     // TypeScript automatically knows:
     // input.name is string
     // input.age is number | undefined  
@@ -566,64 +566,6 @@ const server = new MCPServer({
 ## Authentication
 
 MCP Framework provides optional authentication for SSE endpoints. You can choose between JWT, API Key, OAuth 2.1 authentication, or implement your own custom authentication provider.
-
-### OAuth 2.1 Authentication
-
-The framework supports OAuth 2.1 authorization with PKCE, implementing the MCP authorization specification. This is ideal for integrating with authorization servers like AWS Cognito, Auth0, Okta, etc.
-
-```typescript
-import { MCPServer, OAuthProvider } from "mcp-framework";
-
-const server = new MCPServer({
-  transport: {
-    type: "sse",
-    options: {
-      auth: {
-        provider: new OAuthProvider({
-          // Your authorization server (e.g., Cognito)
-          authorizationServer: "https://your-domain.auth.us-east-1.amazoncognito.com",
-          
-          // OAuth client credentials
-          clientId: process.env.OAUTH_CLIENT_ID,
-          clientSecret: process.env.OAUTH_CLIENT_SECRET, // Optional for public clients
-          
-          // The canonical URI of this MCP server
-          resourceUri: "https://mcp.example.com",
-          
-          // Required scopes
-          requiredScopes: ["openid", "profile"],
-        }),
-        endpoints: {
-          sse: false,      // SSE endpoint is public
-          messages: true,  // Messages require authentication
-        }
-      },
-      // Handle OAuth callbacks
-      oauth: {
-        onCallback: async ({ accessToken, refreshToken }) => {
-          console.log("User authorized successfully!");
-        },
-        onError: async (error) => {
-          console.error("Authorization failed:", error);
-        }
-      }
-    }
-  }
-});
-```
-
-**OAuth Features:**
-- 🔐 **OAuth 2.1 with PKCE**: Enhanced security with Proof Key for Code Exchange
-- 🌐 **Protected Resource Metadata (RFC 9728)**: Automatic authorization server discovery
-- 🎯 **Resource Indicators (RFC 8707)**: Explicit token audience binding
-- ✅ **Token Validation**: Support for JWT and opaque tokens
-- 🔄 **Token Caching**: Configurable token validation caching
-- 🛡️ **Strict Audience Validation**: Prevents token misuse across services
-
-**Quick Links:**
-- [OAuth Setup Guide](./OAUTH_GUIDE.md)
-- [Cognito Example](./examples/oauth-cognito-example.ts)
-- [Custom Validator Example](./examples/oauth-custom-validator.ts)
 
 ### JWT Authentication
 
