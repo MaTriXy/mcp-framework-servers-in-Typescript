@@ -1,0 +1,71 @@
+# {{PROJECT_NAME}} Documentation Integration
+
+## Description
+
+This skill helps you write correct integration code against {{PROJECT_NAME}}'s API by searching, browsing, and reading its official documentation via MCP tools.
+
+## Trigger Conditions
+
+Activate this skill when:
+- The user wants to integrate with {{PROJECT_NAME}}
+- Code references {{PROJECT_NAME}} imports, SDK, or API endpoints
+- The user asks "how do I..." about {{PROJECT_NAME}} features
+- You need to look up request/response shapes, authentication, or error handling
+- You're unsure about the correct API usage pattern
+
+## Instructions
+
+### Documentation Workflow
+
+1. **Discover structure first**: Call `list_sections` to understand what documentation is available
+2. **Search for specifics**: Use `search_docs` with relevant keywords to find the right pages
+3. **Read full pages**: Use `get_page` to read the complete documentation for implementation details
+4. **Iterate**: If the first search doesn't find what you need, try different keywords or browse sections
+
+### Integration Workflow
+
+When writing integration code:
+
+1. **Authentication setup**
+   - Search for "authentication" or "api key" or "oauth"
+   - Read the auth page to understand the required setup
+   <!-- CUSTOMIZE: Add your specific auth pattern here -->
+
+2. **Client initialization**
+   - Search for "getting started" or "quick start" or "installation"
+   - Follow the initialization pattern from the docs
+   <!-- CUSTOMIZE: Add your SDK import and init pattern here -->
+
+3. **API calls**
+   - Search for the specific feature/endpoint
+   - Read the full page for request/response shapes
+   - Pay attention to required vs optional parameters
+   <!-- CUSTOMIZE: Add common API patterns here -->
+
+4. **Error handling**
+   - Search for "errors" or "error handling"
+   - Implement proper error handling as documented
+   <!-- CUSTOMIZE: Add your error handling patterns here -->
+
+### Tips
+
+- Always check the docs before guessing at API shapes
+- When search returns many results, add section filters to narrow down
+- If a page is truncated, search for more specific terms to find the relevant section
+- Check for code examples in the docs — they show the intended usage pattern
+
+<!-- CUSTOMIZE: Add any project-specific tips, common pitfalls, or patterns below -->
+
+## Common Pitfalls
+
+<!-- CUSTOMIZE: List common mistakes developers make when integrating -->
+- Example: Don't forget to set the Content-Type header
+- Example: Rate limits apply per API key, not per endpoint
+- Example: Pagination uses cursor-based pagination, not offset
+
+## Example Prompts
+
+- "Set up authentication with {{PROJECT_NAME}}"
+- "Create a new user via the {{PROJECT_NAME}} API"
+- "How do I handle webhooks from {{PROJECT_NAME}}?"
+- "What are the rate limits for {{PROJECT_NAME}}?"

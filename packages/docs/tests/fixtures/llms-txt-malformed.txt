@@ -1,0 +1,13 @@
+# Malformed Docs
+
+## Valid Section
+
+- [Valid Page](https://example.com/docs/valid): This is valid
+- This line has no link format
+- [Missing URL](): Empty URL
+- [Broken Link(https://example.com/docs/broken): Missing bracket
+Some random text that should be ignored
+
+## Another Section
+
+- [Another Valid](https://example.com/docs/another): Also valid

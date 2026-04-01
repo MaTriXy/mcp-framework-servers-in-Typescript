@@ -1,0 +1,16 @@
+import { DocsServer, FumadocsRemoteSource } from "@mcp-framework/docs";
+
+const source = new FumadocsRemoteSource({
+  baseUrl: process.env.DOCS_BASE_URL || "https://docs.example.com",
+  headers: process.env.DOCS_API_KEY
+    ? { Authorization: `Bearer ${process.env.DOCS_API_KEY}` }
+    : undefined,
+});
+
+const server = new DocsServer({
+  source,
+  name: process.env.DOCS_SERVER_NAME || "{{PROJECT_NAME}}",
+  version: "1.0.0",
+});
+
+server.start();

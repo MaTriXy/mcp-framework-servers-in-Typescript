@@ -1,0 +1,20 @@
+# MyAPI Documentation
+
+> Complete documentation for the MyAPI platform
+
+## Getting Started
+
+- [Introduction](https://docs.myapi.com/docs/introduction): Overview of MyAPI and its core concepts
+- [Installation](https://docs.myapi.com/docs/installation): How to install the MyAPI SDK
+- [Quick Start](https://docs.myapi.com/docs/quick-start): Build your first integration in 5 minutes
+
+## Authentication
+
+- [API Keys](https://docs.myapi.com/docs/auth/api-keys): Managing and using API keys
+- [OAuth 2.0](https://docs.myapi.com/docs/auth/oauth): Setting up OAuth 2.0 authentication
+
+## API Reference
+
+- [Users](https://docs.myapi.com/docs/api/users): User management endpoints
+- [Projects](https://docs.myapi.com/docs/api/projects): Project CRUD operations
+- [Webhooks](https://docs.myapi.com/docs/api/webhooks): Webhook configuration and events
