@@ -26,6 +26,7 @@ export abstract class BaseLoader<T> {
       return dir;
     }
 
+    // 1. Check project root dist/ directory (most common case)
     const projectRoot = process.cwd();
     const distPath = join(projectRoot, 'dist', subdirectory);
 
@@ -34,9 +35,27 @@ export abstract class BaseLoader<T> {
       return distPath;
     }
 
+    // 2. Walk up from the main module (process.argv[1]) to find the subdirectory.
+    //    This handles npx where argv[1] is deep inside a temp/cache directory
+    //    but the package's dist/tools etc. are siblings to the entry point.
     const mainModulePath = process.argv[1];
-    const moduleDir = dirname(mainModulePath);
+    if (mainModulePath) {
+      let searchDir = dirname(mainModulePath);
+      // Search up to 5 levels up from the entry point
+      for (let i = 0; i < 5; i++) {
+        const candidate = join(searchDir, subdirectory);
+        if (existsSync(candidate)) {
+          logger.debug(`Found ${subdirectory} by walking up from argv[1]: ${candidate}`);
+          return candidate;
+        }
+        const parent = dirname(searchDir);
+        if (parent === searchDir) break; // reached filesystem root
+        searchDir = parent;
+      }
+    }
 
+    // 3. Original fallback: derive from module path
+    const moduleDir = mainModulePath ? dirname(mainModulePath) : projectRoot;
     const dir = moduleDir.endsWith('dist')
       ? join(moduleDir, subdirectory)
       : join(moduleDir, 'dist', subdirectory);
