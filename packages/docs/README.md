@@ -1,4 +1,4 @@
-# @mcp-framework/docs
+# @mcpframework/docs
 
 Spin up an MCP documentation server from your Fumadocs site (or any site with `llms.txt`) in minutes. AI agents in Claude Code, Cursor, or any MCP client get tools to search, browse, and retrieve your documentation — enabling them to write correct integration code on the first try.
 
@@ -7,7 +7,7 @@ Built on top of [mcp-framework](https://github.com/QuantGeekDev/mcp-framework).
 ## Quick Start
 
 ```typescript
-import { DocsServer, FumadocsRemoteSource } from "@mcp-framework/docs";
+import { DocsServer, FumadocsRemoteSource } from "@mcpframework/docs";
 
 const source = new FumadocsRemoteSource({
   baseUrl: "https://docs.myapi.com",
@@ -25,7 +25,7 @@ server.start();
 Or scaffold a project instantly:
 
 ```bash
-npx create-docs-server my-api-docs
+npx create-docs-mcp my-api-docs
 ```
 
 ## Sources
@@ -35,7 +35,7 @@ npx create-docs-server my-api-docs
 Purpose-built for [Fumadocs](https://fumadocs.vercel.app/) sites. Uses the native Orama search API for high-quality results, with automatic fallback to local text search.
 
 ```typescript
-import { FumadocsRemoteSource } from "@mcp-framework/docs";
+import { FumadocsRemoteSource } from "@mcpframework/docs";
 
 const source = new FumadocsRemoteSource({
   baseUrl: "https://docs.myapi.com",     // Required
@@ -63,7 +63,7 @@ const source = new FumadocsRemoteSource({
 Works with any documentation site that publishes `llms.txt` and `llms-full.txt` files (Fumadocs, Docusaurus with plugin, etc.). Search is performed locally via text matching.
 
 ```typescript
-import { LlmsTxtSource } from "@mcp-framework/docs";
+import { LlmsTxtSource } from "@mcpframework/docs";
 
 const source = new LlmsTxtSource({
   baseUrl: "https://docs.myapi.com",
@@ -169,7 +169,7 @@ Add to your MCP settings:
 Implement the `DocSource` interface to create adapters for any documentation backend:
 
 ```typescript
-import { DocSource, DocPage, DocSearchResult, DocSection } from "@mcp-framework/docs";
+import { DocSource, DocPage, DocSearchResult, DocSection } from "@mcpframework/docs";
 
 class MyCustomSource implements DocSource {
   name = "my-source";
@@ -208,7 +208,7 @@ class MyCustomSource implements DocSource {
 The built-in `MemoryCache` provides LRU eviction with TTL expiry. You can pass a custom cache:
 
 ```typescript
-import { MemoryCache, LlmsTxtSource } from "@mcp-framework/docs";
+import { MemoryCache, LlmsTxtSource } from "@mcpframework/docs";
 
 const cache = new MemoryCache({
   maxEntries: 200,        // Default: 100
@@ -235,12 +235,12 @@ import {
   SearchDocsTool,
   GetPageTool,
   ListSectionsTool,
-} from "@mcp-framework/docs";
+} from "@mcpframework/docs";
 
 // Subpath imports
-import { LlmsTxtSource, FumadocsRemoteSource } from "@mcp-framework/docs/sources";
-import { SearchDocsTool, GetPageTool, ListSectionsTool } from "@mcp-framework/docs/tools";
-import { MemoryCache } from "@mcp-framework/docs/cache";
+import { LlmsTxtSource, FumadocsRemoteSource } from "@mcpframework/docs/sources";
+import { SearchDocsTool, GetPageTool, ListSectionsTool } from "@mcpframework/docs/tools";
+import { MemoryCache } from "@mcpframework/docs/cache";
 ```
 
 ## License

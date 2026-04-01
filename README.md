@@ -844,6 +844,72 @@ class CustomAuthProvider implements AuthProvider {
 }
 ```
 
+## Documentation MCP Servers (`@mcpframework/docs`)
+
+Spin up an MCP documentation server from any Fumadocs site or any site with `llms.txt` — AI agents get tools to search, browse, and retrieve your docs.
+
+### Quick Start (CLI)
+
+```bash
+# Scaffold a new docs MCP server project
+npx create-docs-mcp my-api-docs
+cd my-api-docs
+
+# Configure your docs site URL
+cp .env.example .env
+# Edit .env → set DOCS_BASE_URL=https://docs.myapi.com
+
+# Build and run
+npm run build
+npm start
+```
+
+### Quick Start (Programmatic)
+
+```typescript
+import { DocsServer, FumadocsRemoteSource } from "@mcpframework/docs";
+
+const source = new FumadocsRemoteSource({
+  baseUrl: "https://docs.myapi.com",
+});
+
+const server = new DocsServer({
+  source,
+  name: "my-api-docs",
+  version: "1.0.0",
+});
+
+server.start();
+```
+
+### Source Adapters
+
+| Adapter | Best For | Search |
+|---------|----------|--------|
+| `FumadocsRemoteSource` | Fumadocs sites | Native Orama search with fallback |
+| `LlmsTxtSource` | Any site with `llms.txt` | Local text matching |
+| Custom `DocSource` | Any documentation backend | Your implementation |
+
+### Built-in MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_docs` | Search documentation by keyword or phrase |
+| `get_page` | Retrieve full markdown content of a page |
+| `list_sections` | Browse the documentation tree structure |
+
+### Add to Your MCP Client
+
+```bash
+# Claude Code
+claude mcp add my-api-docs -- node /path/to/my-api-docs/dist/index.js
+
+# Or with environment variable
+claude mcp add my-api-docs -e DOCS_BASE_URL=https://docs.myapi.com -- node /path/to/my-api-docs/dist/index.js
+```
+
+For Claude Desktop / Cursor configuration and full documentation, see the [@mcpframework/docs README](./packages/docs/README.md).
+
 ## License
 
 MIT

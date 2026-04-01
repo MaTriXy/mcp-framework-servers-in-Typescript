@@ -1,12 +1,12 @@
 {
-  "name": "@mcp-framework/docs",
+  "name": "@mcpframework/docs",
   "version": "0.1.0",
   "description": "MCP documentation server framework — spin up an MCP server from your Fumadocs site or llms.txt",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "create-docs-server": "./dist/cli/create-docs-server.js"
+    "create-docs-mcp": "./dist/cli/create-docs-mcp.js"
   },
   "exports": {
     ".": {
