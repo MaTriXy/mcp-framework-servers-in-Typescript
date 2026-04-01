@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+export type CompletionResult = {
+  values: string[];
+  total?: number;
+  hasMore?: boolean;
+};
+
 export type PromptArgumentSchema<T> = {
   [K in keyof T]: {
     type: z.ZodType<T[K]>;
@@ -38,6 +44,11 @@ export interface PromptProtocol {
       };
     }>
   >;
+  complete?(
+    argumentName: string,
+    value: string,
+    context?: Record<string, string>
+  ): Promise<CompletionResult>;
 }
 
 export abstract class MCPPrompt<TArgs extends Record<string, any> = {}>
@@ -83,6 +94,14 @@ export abstract class MCPPrompt<TArgs extends Record<string, any> = {}>
 
     const validatedArgs = (await zodSchema.parse(args)) as TArgs;
     return this.generateMessages(validatedArgs);
+  }
+
+  async complete(
+    argumentName: string,
+    value: string,
+    context?: Record<string, string>
+  ): Promise<CompletionResult> {
+    return { values: [] };
   }
 
   protected async fetch<T>(url: string, init?: RequestInit): Promise<T> {

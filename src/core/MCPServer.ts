@@ -9,6 +9,7 @@ import {
   ReadResourceRequestSchema,
   SubscribeRequestSchema,
   UnsubscribeRequestSchema,
+  CompleteRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { ToolProtocol } from '../tools/BaseTool.js';
 import { PromptProtocol } from '../prompts/BasePrompt.js';
@@ -56,6 +57,7 @@ export type ServerCapabilities = {
     listChanged?: true;
     subscribe?: true;
   };
+  completions?: {};
 };
 
 export class MCPServer {
@@ -300,8 +302,11 @@ export class MCPServer {
 
       targetServer.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
         logger.debug(`Received ListResourceTemplates request`);
+        const templates = Array.from(this.resourcesMap.values())
+          .map((resource) => resource.templateDefinition)
+          .filter((t): t is NonNullable<typeof t> => Boolean(t));
         const response = {
-          resourceTemplates: [],
+          resourceTemplates: templates,
           nextCursor: undefined,
         };
         logger.debug(`Sending ListResourceTemplates response: ${JSON.stringify(response)}`);
@@ -336,6 +341,35 @@ export class MCPServer {
         return {};
       });
     }
+
+    if (this.capabilities.completions) {
+      targetServer.setRequestHandler(CompleteRequestSchema, async (request: any) => {
+        const { ref, argument } = request.params;
+
+        if (ref.type === 'ref/prompt') {
+          const prompt = this.promptsMap.get(ref.name);
+          if (prompt && typeof prompt.complete === 'function') {
+            const result = await prompt.complete(argument.name, argument.value);
+            return { completion: result };
+          }
+          return { completion: { values: [] } };
+        }
+
+        if (ref.type === 'ref/resource') {
+          for (const resource of this.resourcesMap.values()) {
+            if (resource.templateDefinition?.uriTemplate === ref.uri || resource.uri === ref.uri) {
+              if (typeof resource.complete === 'function') {
+                const result = await resource.complete(argument.name, argument.value);
+                return { completion: result };
+              }
+            }
+          }
+          return { completion: { values: [] } };
+        }
+
+        return { completion: { values: [] } };
+      });
+    }
   }
 
   private async detectCapabilities(): Promise<ServerCapabilities> {
@@ -352,6 +386,11 @@ export class MCPServer {
     if (await this.resourceLoader.hasResources()) {
       this.capabilities.resources = {};
       logger.debug('Resources capability enabled');
+    }
+
+    if (this.capabilities.prompts || this.capabilities.resources) {
+      this.capabilities.completions = {};
+      logger.debug('Completions capability enabled');
     }
 
     logger.debug(`Capabilities detected: ${JSON.stringify(this.capabilities)}`);
