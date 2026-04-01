@@ -4,6 +4,7 @@ import { AbstractTransport } from '../base.js';
 import { JSONRPCMessage, isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { HttpStreamTransportConfig } from './types.js';
+import { DEFAULT_CORS_CONFIG } from '../sse/types.js';
 import { logger } from '../../core/Logger.js';
 import { ProtectedResourceMetadata } from '../../auth/metadata/protected-resource.js';
 import { handleAuthentication } from '../utils/auth-handler.js';
@@ -224,13 +225,13 @@ export class HttpStreamTransport extends AbstractTransport {
     if (!this._config.cors) return;
 
     const cors = this._config.cors;
-    res.setHeader('Access-Control-Allow-Origin', cors.allowOrigin || '*');
-    res.setHeader('Access-Control-Allow-Methods', cors.allowMethods || 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', cors.allowHeaders || 'Content-Type, Authorization, Mcp-Session-Id');
-    res.setHeader('Access-Control-Expose-Headers', cors.exposeHeaders || 'Content-Type, Authorization, Mcp-Session-Id');
-    
+    res.setHeader('Access-Control-Allow-Origin', cors.allowOrigin || DEFAULT_CORS_CONFIG.allowOrigin!);
+    res.setHeader('Access-Control-Allow-Methods', cors.allowMethods || DEFAULT_CORS_CONFIG.allowMethods!);
+    res.setHeader('Access-Control-Allow-Headers', cors.allowHeaders || DEFAULT_CORS_CONFIG.allowHeaders!);
+    res.setHeader('Access-Control-Expose-Headers', cors.exposeHeaders || DEFAULT_CORS_CONFIG.exposeHeaders!);
+
     if (includeMaxAge) {
-      res.setHeader('Access-Control-Max-Age', cors.maxAge || '86400');
+      res.setHeader('Access-Control-Max-Age', cors.maxAge || DEFAULT_CORS_CONFIG.maxAge!);
     }
   }
 
