@@ -195,6 +195,23 @@ export class MCPServer {
     return process.cwd();
   }
 
+  /**
+   * Creates a new SDK Server instance configured with all registered handlers.
+   * Used by SSE transport to create isolated per-session servers.
+   */
+  private createSDKServerForSession(): Server {
+    const serverOptions: Record<string, unknown> = { capabilities: this.capabilities };
+    if (this._hasApps) {
+      serverOptions.extensions = { [MCP_APP_EXTENSION_ID]: {} };
+    }
+    const sessionServer = new Server(
+      { name: this.serverName, version: this.serverVersion },
+      serverOptions as any,
+    );
+    this.setupHandlers(sessionServer);
+    return sessionServer;
+  }
+
   private createTransport(): BaseTransport {
     logger.debug(`Creating transport: ${this.transportConfig.type}`);
 
@@ -977,6 +994,18 @@ export class MCPServer {
       this.transport = this.createTransport();
 
       logger.info(`Connecting transport (${this.transport.type}) to SDK Server...`);
+
+      // For SSE transport, set up per-session SDK Server instances for proper
+      // session isolation. Each SSE connection gets its own SDK Server with all
+      // handlers registered, connected to its own SDK SSEServerTransport.
+      // This matches the SDK's expected usage pattern and fixes session
+      // collision issues (e.g., n8n opening a new connection per execution).
+      if (this.transport.type === 'sse') {
+        const sseTransport = this.transport as SSEServerTransport;
+        sseTransport.setServerFactory(() => this.createSDKServerForSession());
+      }
+
+      // connect() calls transport.start() internally
       await this.server.connect(this.transport);
 
       logger.info(
