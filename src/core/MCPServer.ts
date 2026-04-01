@@ -14,7 +14,7 @@ import {
 import { ToolProtocol } from '../tools/BaseTool.js';
 import { PromptProtocol } from '../prompts/BasePrompt.js';
 import { ResourceProtocol } from '../resources/BaseResource.js';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { logger } from './Logger.js';
 import { ToolLoader } from '../loaders/toolLoader.js';
@@ -103,9 +103,38 @@ export class MCPServer {
     if (configPath) {
       return configPath;
     }
-    if (process.argv[1]) {
-      return dirname(process.argv[1]);
+
+    // 1. Check project root dist/ directory (most common case)
+    const projectRoot = process.cwd();
+    const distPath = join(projectRoot, 'dist');
+    if (existsSync(distPath)) {
+      logger.debug(`Using project's dist directory: ${distPath}`);
+      return distPath;
     }
+
+    // 2. Walk up from the main module (process.argv[1]) to find dist/.
+    //    Handles npx where argv[1] is deep inside a temp/cache directory.
+    const mainModulePath = process.argv[1];
+    if (mainModulePath) {
+      let searchDir = dirname(mainModulePath);
+      for (let i = 0; i < 5; i++) {
+        const candidate = join(searchDir, 'dist');
+        if (existsSync(candidate)) {
+          logger.debug(`Found dist/ by walking up from argv[1]: ${candidate}`);
+          return candidate;
+        }
+        const parent = dirname(searchDir);
+        if (parent === searchDir) break;
+        searchDir = parent;
+      }
+
+      // 3. Fallback: use argv[1] dirname directly
+      const moduleDir = dirname(mainModulePath);
+      const basePath = moduleDir.endsWith('dist') ? moduleDir : join(moduleDir, 'dist');
+      logger.debug(`Using module path-based resolution: ${basePath}`);
+      return basePath;
+    }
+
     return process.cwd();
   }
 
