@@ -1,6 +1,16 @@
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { z } from 'zod';
 import { MCPTool } from '../../src/tools/BaseTool.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { CreateMessageRequest, CreateMessageResult } from '@modelcontextprotocol/sdk/types.js';
+import {RequestOptions} from '@modelcontextprotocol/sdk/shared/protocol.js';
+
+// Mock the Server class
+jest.mock('@modelcontextprotocol/sdk/server/index.js', () => ({
+  Server: jest.fn().mockImplementation(() => ({
+    createMessage: jest.fn(),
+  })),
+}));
 
 describe('BaseTool', () => {
   describe('Legacy Pattern (Separate Schema Definition)', () => {
@@ -486,6 +496,149 @@ describe('BaseTool', () => {
 
       console.log('MCP Tool Definition for client debugging:');
       console.log(JSON.stringify(definition, null, 2));
+    });
+  });
+
+  describe('Sampling', () => {
+    // Expose the protected samplingRequest for direct testing
+    class SamplingTestTool extends MCPTool {
+      name = 'sampling_tool';
+      description = 'A tool that uses sampling';
+      schema = z.object({
+        prompt: z.string().describe('The prompt to sample'),
+      });
+
+      protected async execute(input: { prompt: string }): Promise<unknown> {
+        const result = await this.samplingRequest({
+          messages: [
+            {
+              role: 'user',
+              content: { type: 'text', text: input.prompt },
+            },
+          ],
+          maxTokens: 100,
+        });
+        return { sampledText: result.content.text };
+      }
+
+      // Expose protected method for testing
+      public testSamplingRequest(
+        request: CreateMessageRequest['params'],
+        options?: RequestOptions,
+      ) {
+        return this.samplingRequest(request, options);
+      }
+    }
+
+    let tool: SamplingTestTool;
+    let mockServer: jest.Mocked<Server>;
+
+    beforeEach(() => {
+      tool = new SamplingTestTool();
+      mockServer = new Server(
+        { name: 'test-server', version: '1.0.0' },
+        { capabilities: {} },
+      ) as jest.Mocked<Server>;
+      mockServer.createMessage = jest.fn();
+    });
+
+    it('should inject server without throwing', () => {
+      expect(() => tool.injectServer(mockServer)).not.toThrow();
+    });
+
+    it('should silently handle double injection', () => {
+      tool.injectServer(mockServer);
+      expect(() => tool.injectServer(mockServer)).not.toThrow();
+    });
+
+    it('should throw when samplingRequest called without server', async () => {
+      await expect(
+        tool.testSamplingRequest({
+          messages: [{ role: 'user', content: { type: 'text', text: 'test' } }],
+          maxTokens: 100,
+        }),
+      ).rejects.toThrow(
+        "Cannot make sampling request: server not available in tool 'sampling_tool'.",
+      );
+    });
+
+    it('should call server.createMessage with correct params', async () => {
+      const mockResult: CreateMessageResult = {
+        model: 'test-model',
+        role: 'assistant',
+        content: { type: 'text', text: 'Sampled response' },
+      };
+      mockServer.createMessage.mockResolvedValue(mockResult);
+      tool.injectServer(mockServer);
+
+      const request: CreateMessageRequest['params'] = {
+        messages: [{ role: 'user', content: { type: 'text', text: 'Hello' } }],
+        maxTokens: 100,
+        temperature: 0.7,
+        systemPrompt: 'Be helpful',
+      };
+
+      const result = await tool.testSamplingRequest(request);
+
+      expect(mockServer.createMessage).toHaveBeenCalledWith(request, undefined);
+      expect(result).toEqual(mockResult);
+    });
+
+    it('should propagate createMessage errors', async () => {
+      tool.injectServer(mockServer);
+      mockServer.createMessage.mockRejectedValue(new Error('Sampling failed'));
+
+      await expect(
+        tool.testSamplingRequest({
+          messages: [{ role: 'user', content: { type: 'text', text: 'test' } }],
+          maxTokens: 100,
+        }),
+      ).rejects.toThrow('Sampling failed');
+    });
+
+    it('should pass request options to createMessage', async () => {
+      const mockResult: CreateMessageResult = {
+        model: 'claude-3-sonnet',
+        role: 'assistant',
+        content: { type: 'text', text: 'Complex response' },
+        stopReason: 'endTurn',
+      };
+      mockServer.createMessage.mockResolvedValue(mockResult);
+      tool.injectServer(mockServer);
+
+      const request: CreateMessageRequest['params'] = {
+        messages: [
+          { role: 'user', content: { type: 'text', text: 'First message' } },
+          { role: 'assistant', content: { type: 'text', text: 'Assistant response' } },
+          { role: 'user', content: { type: 'text', text: 'Follow up' } },
+        ],
+        maxTokens: 500,
+        temperature: 0.8,
+        systemPrompt: 'You are a helpful assistant',
+        modelPreferences: {
+          hints: [{ name: 'claude-3' }],
+          costPriority: 0.3,
+          speedPriority: 0.7,
+          intelligencePriority: 0.9,
+        },
+        stopSequences: ['END', 'STOP'],
+        metadata: { taskType: 'analysis' },
+      };
+
+      const options: RequestOptions = {
+        timeout: 5000,
+        maxTotalTimeout: 10000,
+        signal: new AbortController().signal,
+        resetTimeoutOnProgress: true,
+        onprogress: (progress) => {
+          console.log('Progress:', progress);
+        },
+      };
+
+      const result = await tool.testSamplingRequest(request, options);
+
+      expect(mockServer.createMessage).toHaveBeenCalledWith(request, options);
+      expect(result).toEqual(mockResult);
     });
   });
 });
