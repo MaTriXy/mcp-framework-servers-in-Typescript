@@ -31,6 +31,43 @@ export type ElicitationFieldSchema = {
 );
 
 export { ElicitResult, ElicitRequestFormParams, ElicitRequestURLParams };
+export { CreateMessageResultWithTools, CreateMessageRequestParamsWithTools, ToolChoice };
+
+/**
+ * Convenience alias for ElicitResult from the SDK.
+ * Contains action ('accept' | 'decline' | 'cancel') and optional content.
+ */
+export type ElicitationResult = ElicitResult;
+
+/**
+ * A tool definition for use in sampling requests.
+ * Describes a tool that the LLM can invoke during sampling.
+ */
+export interface SamplingTool {
+  name: string;
+  description?: string;
+  inputSchema: {
+    type: 'object';
+    properties?: Record<string, unknown>;
+    required?: string[];
+    [key: string]: unknown;
+  };
+}
+
+/**
+ * Controls tool usage behavior in sampling requests.
+ */
+export interface SamplingToolChoice {
+  mode?: 'auto' | 'required' | 'none';
+}
+
+/**
+ * Represents a root directory or URI returned by the client.
+ */
+export interface Root {
+  uri: string;
+  name?: string;
+}
 
 export type ToolInputSchema<T> = {
   [K in keyof T]: {
@@ -68,6 +105,10 @@ export interface ToolAnnotations {
   destructiveHint?: boolean;
   idempotentHint?: boolean;
   openWorldHint?: boolean;
+}
+
+export interface ToolExecution {
+  taskSupport?: 'forbidden' | 'optional' | 'required';
 }
 
 export interface ContentAnnotations {
@@ -131,6 +172,7 @@ export interface ToolProtocol extends SDKTool {
     title?: string;
     icons?: MCPIcon[];
     annotations?: ToolAnnotations;
+    execution?: ToolExecution;
     outputSchema?: Record<string, unknown>;
   };
   toolCall(request: {
@@ -176,39 +218,28 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
   title?: string;
   icons?: MCPIcon[];
   annotations?: ToolAnnotations;
-  protected _outputSchema?: z.ZodObject<any>;
+  execution?: ToolExecution;
+  protected outputSchemaShape?: z.ZodObject<any>;
   [key: string]: unknown;
 
   private server: Server | undefined;
-  private _currentProgressToken?: string | number;
-  private _currentAbortSignal?: AbortSignal;
+  private _progressToken?: string | number;
+  private _abortSignal?: AbortSignal;
 
   /**
-   * Injects the server into this tool to allow sampling requests.
-   * Automatically called by the MCP server when registering the tool.
-   * Subsequent calls are silently ignored.
-   */
-  public injectServer(server: Server): void {
-    if (this.server) {
-      return;
-    }
-    this.server = server;
-  }
-
-  /**
-   * Sets the progress token for the current tool invocation.
-   * Called by MCPServer before and after tool execution.
+   * Sets the progress token for this tool call.
+   * Called by MCPServer before executing the tool.
    */
   public setProgressToken(token?: string | number): void {
-    this._currentProgressToken = token;
+    this._progressToken = token;
   }
 
   /**
-   * Sets the abort signal for the current tool invocation.
-   * Called by MCPServer before and after tool execution.
+   * Sets the abort signal for this tool call.
+   * Called by MCPServer before executing the tool.
    */
   public setAbortSignal(signal?: AbortSignal): void {
-    this._currentAbortSignal = signal;
+    this._abortSignal = signal;
   }
 
   /**
@@ -228,14 +259,14 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
    * ```
    */
   protected get abortSignal(): AbortSignal | undefined {
-    return this._currentAbortSignal;
+    return this._abortSignal;
   }
 
   /**
    * Report progress for the current tool invocation.
    * Only sends a notification if a progress token was provided by the client.
    *
-   * @param progress - Current progress value
+   * @param progress - Current progress value (MUST increase with each call)
    * @param total - Optional total value for progress calculation
    * @param message - Optional human-readable progress message
    *
@@ -243,20 +274,20 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
    * ```typescript
    * async execute(input: MCPInput<this>) {
    *   for (let i = 0; i < items.length; i++) {
-   *     await this.reportProgress(i, items.length, `Processing item ${i + 1}`);
+   *     await this.reportProgress(i + 1, items.length, `Processing item ${i + 1}`);
    *     await processItem(items[i]);
    *   }
    * }
    * ```
    */
   protected async reportProgress(progress: number, total?: number, message?: string): Promise<void> {
-    if (this._currentProgressToken == null || !this.server) return;
+    if (this._progressToken == null || !this.server) return;
 
     try {
       await this.server.notification({
         method: 'notifications/progress',
         params: {
-          progressToken: this._currentProgressToken,
+          progressToken: this._progressToken,
           progress,
           ...(total != null && { total }),
           ...(message != null && { message }),
@@ -274,14 +305,6 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
    * @param level - The log level (debug, info, notice, warning, error, critical, alert, emergency)
    * @param data - The data to log (string, object, etc.)
    * @param loggerName - Optional logger name; defaults to this tool's name
-   *
-   * @example
-   * ```typescript
-   * async execute(input: MCPInput<this>) {
-   *   await this.log('info', 'Starting processing');
-   *   await this.log('debug', { step: 1, data: input });
-   * }
-   * ```
    */
   protected async log(
     level: 'debug' | 'info' | 'notice' | 'warning' | 'error' | 'critical' | 'alert' | 'emergency',
@@ -301,27 +324,15 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
   }
 
   /**
-   * Query the client for its filesystem root boundaries.
-   * Returns an empty array if the client doesn't support roots or the server isn't connected.
-   *
-   * @example
-   * ```typescript
-   * async execute(input: MCPInput<this>) {
-   *   const roots = await this.getRoots();
-   *   for (const root of roots) {
-   *     console.log(`Root: ${root.uri} (${root.name})`);
-   *   }
-   * }
-   * ```
+   * Injects the server into this tool to allow sampling requests.
+   * Automatically called by the MCP server when registering the tool.
+   * Subsequent calls are silently ignored.
    */
-  protected async getRoots(): Promise<Array<{ uri: string; name?: string }>> {
-    if (!this.server) return [];
-    try {
-      const result = await (this.server as any).listRoots?.();
-      return result?.roots ?? [];
-    } catch {
-      return [];
+  public injectServer(server: Server): void {
+    if (this.server) {
+      return;
     }
+    this.server = server;
   }
 
   /**
@@ -351,12 +362,51 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
   }
 
   /**
+   * Submit a sampling request with tool support to the client via the MCP sampling protocol.
+   * The client's LLM may invoke the provided tools during sampling, returning tool_use
+   * content blocks in the response.
+   *
+   * Can only be called from within a tool's execute() method after the server
+   * has been injected.
+   *
+   * @param request  Sampling parameters including messages, maxTokens, and tools.
+   * @param options  Optional request options (timeout, signal, etc.).
+   * @returns The sampling result, which may contain tool_use content blocks.
+   *
+   * @example
+   * ```typescript
+   * const result = await this.samplingRequestWithTools({
+   *   messages: [{ role: "user", content: { type: "text", text: "What is the weather?" } }],
+   *   maxTokens: 500,
+   *   tools: [{
+   *     name: "get_weather",
+   *     description: "Get weather for a location",
+   *     inputSchema: { type: "object", properties: { city: { type: "string" } }, required: ["city"] }
+   *   }],
+   *   toolChoice: { mode: "auto" }
+   * });
+   * ```
+   */
+  protected async samplingRequestWithTools(
+    request: CreateMessageRequestParamsWithTools,
+    options?: RequestOptions,
+  ): Promise<CreateMessageResultWithTools> {
+    if (!this.server) {
+      throw new Error(
+        `Cannot make sampling request: server not available in tool '${this.name}'. ` +
+        `Sampling is only available during tool execution within an MCPServer.`,
+      );
+    }
+    return this.server.createMessage(request, options);
+  }
+
+  /**
    * Request structured input from the user via form-based elicitation.
    * Can only be called from within a tool's execute() method after the server
    * has been injected. The client must support elicitation capabilities.
    *
    * Only flat objects with primitive properties are supported per the MCP spec.
-   * Do NOT request sensitive data (passwords, API keys) via form mode — use
+   * Do NOT request sensitive data (passwords, API keys) via form mode -- use
    * elicitUrl() for sensitive data instead.
    *
    * @param message A human-readable message explaining why the input is needed.
@@ -434,7 +484,7 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
    * );
    *
    * if (result.action === 'accept') {
-   *   // User agreed to open the URL — wait for completion
+   *   // User agreed to open the URL -- wait for completion
    * }
    * ```
    */
@@ -456,6 +506,40 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       url,
       elicitationId,
     } as ElicitRequestURLParams, options);
+  }
+
+  /**
+   * Request the list of root URIs from the connected client.
+   * Roots represent the top-level directories or URIs that the client
+   * has made available to the server.
+   *
+   * Can only be called from within a tool's execute() method after the server
+   * has been injected. The client must support roots capability.
+   *
+   * @param options Optional request options (timeout, signal, etc.).
+   * @returns An array of root objects with uri and optional name.
+   *
+   * @example
+   * ```typescript
+   * const roots = await this.getRoots();
+   * for (const root of roots) {
+   *   console.log(`Root: ${root.name ?? root.uri}`);
+   * }
+   * ```
+   */
+  protected async getRoots(options?: RequestOptions): Promise<Root[]> {
+    if (!this.server) {
+      throw new Error(
+        `Cannot get roots: server not available in tool '${this.name}'. ` +
+        `Roots are only available during tool execution within an MCPServer.`,
+      );
+    }
+    try {
+      const result = await this.server.listRoots(undefined, options);
+      return (result.roots ?? []).map((r) => ({ uri: r.uri, name: r.name }));
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -763,13 +847,14 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       ...(this.title && { title: this.title }),
       ...(this.icons && this.icons.length > 0 && { icons: this.icons }),
       ...(this.annotations && Object.keys(this.annotations).length > 0 && { annotations: this.annotations }),
-      ...(this._outputSchema && { outputSchema: this.generateOutputSchema() }),
+      ...(this.execution && Object.keys(this.execution).length > 0 && { execution: this.execution }),
+      ...(this.outputSchemaShape && { outputSchema: this.generateOutputSchema() }),
     };
   }
 
   private generateOutputSchema(): Record<string, unknown> {
-    if (!this._outputSchema) return {};
-    const shape = this._outputSchema.shape;
+    if (!this.outputSchemaShape) return {};
+    const shape = this.outputSchemaShape.shape;
     const properties: Record<string, any> = {};
     const required: string[] = [];
 
@@ -804,9 +889,9 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
       const response = this.createSuccessResponse(result);
 
       // If tool has outputSchema and result is a plain object, add structuredContent
-      if (this._outputSchema && result !== null && typeof result === 'object' && !Array.isArray(result) && !this.isValidContent(result)) {
+      if (this.outputSchemaShape && result !== null && typeof result === 'object' && !Array.isArray(result) && !this.isValidContent(result)) {
         try {
-          const validated = this._outputSchema.parse(result);
+          const validated = this.outputSchemaShape.parse(result);
           return {
             ...response,
             structuredContent: validated as Record<string, unknown>,
