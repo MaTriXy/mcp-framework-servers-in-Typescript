@@ -830,8 +830,8 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
         description: fieldSchema.description,
       };
 
-      // If the field is not an optional, add it to the required array.
-      if (!(fieldSchema.type instanceof z.ZodOptional)) {
+      // If the field is not optional/nullable/defaulted, add it to the required array.
+      if (!this.isFieldOptional(fieldSchema.type)) {
         required.push(key);
       }
     });
@@ -945,10 +945,18 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
   }
 
   private getJsonSchemaType(zodType: z.ZodType<any>): string {
-    // Unwrap optional types to correctly determine the JSON schema type.
+    // Unwrap optional/nullable/default types to correctly determine the JSON schema type.
     let currentType = zodType;
-    if (currentType instanceof z.ZodOptional) {
-      currentType = currentType.unwrap();
+    while (true) {
+      if (currentType instanceof z.ZodOptional) {
+        currentType = currentType.unwrap();
+      } else if (currentType instanceof z.ZodNullable) {
+        currentType = currentType.unwrap();
+      } else if (currentType instanceof z.ZodDefault) {
+        currentType = (currentType as any)._def.innerType;
+      } else {
+        break;
+      }
     }
 
     if (currentType instanceof z.ZodString) return 'string';
@@ -957,6 +965,17 @@ export abstract class MCPTool<TInput extends Record<string, any> = any, TSchema 
     if (currentType instanceof z.ZodArray) return 'array';
     if (currentType instanceof z.ZodObject) return 'object';
     return 'string';
+  }
+
+  private isFieldOptional(zodType: z.ZodType<any>): boolean {
+    let current = zodType;
+    while (true) {
+      if (current instanceof z.ZodOptional) return true;
+      if (current instanceof z.ZodNullable) return true;
+      if (current instanceof z.ZodDefault) return true;
+      break;
+    }
+    return false;
   }
 
   protected createSuccessResponse(data: unknown): ToolResponse {

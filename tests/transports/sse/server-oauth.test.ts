@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { SSEServerTransport } from '../../../src/transports/sse/server.js';
 import { OAuthAuthProvider } from '../../../src/auth/providers/oauth.js';
 import { MockAuthServer } from '../../fixtures/mock-auth-server.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import http from 'node:http';
 
 describe('SSEServerTransport OAuth Authentication', () => {
@@ -54,6 +55,14 @@ describe('SSEServerTransport OAuth Authentication', () => {
           messages: true,
         },
       },
+    });
+
+    // SSE transport requires a server factory for per-session SDK servers
+    transport.setServerFactory(() => {
+      return new Server(
+        { name: 'test-server', version: '0.0.1' },
+        { capabilities: {} }
+      );
     });
   });
 
@@ -140,13 +149,18 @@ describe('SSEServerTransport OAuth Authentication', () => {
     it('should NOT return 401 when valid OAuth token is provided for messages', async () => {
       await transport.start();
 
-      // Register message handler
-      transport.onmessage = async () => {};
+      // First establish an SSE session so we have a valid sessionId
+      const sseResponse = await makeGetRequest(testPort, '/sse', validToken);
+      expect(sseResponse.statusCode).toBe(200);
 
-      // Post message with valid token
+      // Extract sessionId from the SSE endpoint event
+      const endpointMatch = sseResponse.body.match(/data: \/messages\?sessionId=([^\n]+)/);
+      const sessionId = endpointMatch ? endpointMatch[1].trim() : '';
+
+      // Post message with valid token and valid sessionId
       const response = await makePostRequest(
         testPort,
-        '/messages',
+        `/messages?sessionId=${sessionId}`,
         {
           jsonrpc: '2.0',
           method: 'ping',
@@ -155,7 +169,7 @@ describe('SSEServerTransport OAuth Authentication', () => {
         validToken
       );
 
-      // Auth should pass (not 401), even though request may fail for other reasons (403/409)
+      // Auth should pass (not 401), even though request may fail for other reasons (400/500)
       expect(response.statusCode).not.toBe(401);
       expect(response.headers['www-authenticate']).toBeUndefined();
     });
@@ -180,17 +194,18 @@ describe('SSEServerTransport OAuth Authentication', () => {
     it('should require auth for both SSE connection and messages', async () => {
       await transport.start();
 
-      // Register message handler
-      transport.onmessage = async () => {};
-
       // 1. Connect to SSE with valid token (should pass auth)
       const sseResponse = await makeGetRequest(testPort, '/sse', validToken);
       expect(sseResponse.statusCode).toBe(200);
 
-      // 2. Post message with valid token (should pass auth, may fail for other reasons)
+      // Extract sessionId from the SSE endpoint event
+      const endpointMatch = sseResponse.body.match(/data: \/messages\?sessionId=([^\n]+)/);
+      const sessionId = endpointMatch ? endpointMatch[1].trim() : '';
+
+      // 2. Post message with valid token and valid sessionId (should pass auth, may fail for other reasons)
       const messageResponse = await makePostRequest(
         testPort,
-        '/messages',
+        `/messages?sessionId=${sessionId}`,
         {
           jsonrpc: '2.0',
           method: 'ping',
@@ -202,7 +217,7 @@ describe('SSEServerTransport OAuth Authentication', () => {
       expect(messageResponse.statusCode).not.toBe(401);
 
       // 3. Try to post message without token (should fail with 401)
-      const unauthorizedResponse = await makePostRequest(testPort, '/messages', {
+      const unauthorizedResponse = await makePostRequest(testPort, `/messages?sessionId=${sessionId}`, {
         jsonrpc: '2.0',
         method: 'ping',
         id: 2,
