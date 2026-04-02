@@ -1,7 +1,8 @@
 import { createRequire } from 'module';
 import { spawnSync } from 'child_process';
-import { mkdir, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { existsSync } from 'fs';
+import { mkdir, readdir, writeFile } from 'fs/promises';
+import { basename, join } from 'path';
 import prompts from 'prompts';
 import { generateReadme } from '../templates/readme.js';
 import { execa } from 'execa';
@@ -49,17 +50,46 @@ export async function createProject(
     projectName = name;
   }
 
+  const isCurrentDir = name === '.';
+
+  if (isCurrentDir) {
+    // Derive project name from current directory name
+    projectName = basename(process.cwd())
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .replace(/-{2,}/g, '-');
+
+    if (!projectName) {
+      console.error('❌ Error: Could not derive a valid project name from the current directory name');
+      console.error('   Please rename the directory or specify a project name: mcp create <name>');
+      process.exit(1);
+    }
+  }
+
   if (!projectName) {
     throw new Error('Project name is required');
   }
 
-  const projectDir = join(process.cwd(), projectName);
+  const projectDir = isCurrentDir ? process.cwd() : join(process.cwd(), projectName);
   const srcDir = join(projectDir, 'src');
   const toolsDir = join(srcDir, 'tools');
 
   try {
+    if (isCurrentDir) {
+      const entries = await readdir(projectDir);
+      const conflicts = ['package.json', 'tsconfig.json', 'src'].filter(f => entries.includes(f));
+      if (conflicts.length > 0) {
+        console.error(`❌ Error: Current directory already contains: ${conflicts.join(', ')}`);
+        console.error('   Please use an empty directory or specify a project name: mcp create <name>');
+        process.exit(1);
+      }
+    }
+
     console.log('Creating project structure...');
-    await mkdir(projectDir);
+    if (!isCurrentDir) {
+      await mkdir(projectDir);
+    }
     await mkdir(srcDir);
     await mkdir(toolsDir);
 
@@ -321,14 +351,16 @@ OAUTH_ISSUER=https://auth.example.com
 
     process.chdir(projectDir);
 
-    console.log('Initializing git repository...');
-    const gitInit = spawnSync('git', ['init'], {
-      stdio: 'inherit',
-      shell: true,
-    });
+    if (!isCurrentDir || !existsSync(join(projectDir, '.git'))) {
+      console.log('Initializing git repository...');
+      const gitInit = spawnSync('git', ['init'], {
+        stdio: 'inherit',
+        shell: true,
+      });
 
-    if (gitInit.status !== 0) {
-      throw new Error('Failed to initialize git repository');
+      if (gitInit.status !== 0) {
+        throw new Error('Failed to initialize git repository');
+      }
     }
 
     if (shouldInstall) {
@@ -370,10 +402,12 @@ OAUTH_ISSUER=https://auth.example.com
 ✅ Project ${projectName} created and built successfully with OAuth 2.1!
 
 🔐 OAuth Setup Required:
-1. cd ${projectName}
+${isCurrentDir ? `1. Copy .env.example to .env
+2. Configure your OAuth provider settings in .env
+3. See docs/OAUTH.md for provider-specific setup guides` : `1. cd ${projectName}
 2. Copy .env.example to .env
 3. Configure your OAuth provider settings in .env
-4. See docs/OAUTH.md for provider-specific setup guides
+4. See docs/OAUTH.md for provider-specific setup guides`}
 
 📖 OAuth Resources:
    - Framework docs: https://github.com/QuantGeekDev/mcp-framework/blob/main/docs/OAUTH.md
@@ -385,11 +419,13 @@ OAUTH_ISSUER=https://auth.example.com
       } else {
         console.log(`
 Project ${projectName} created and built successfully!
-
+${isCurrentDir ? `
+Add more tools using:
+   mcp add tool <n>` : `
 You can now:
 1. cd ${projectName}
 2. Add more tools using:
-   mcp add tool <n>
+   mcp add tool <n>`}
     `);
       }
     } else {
@@ -398,12 +434,16 @@ You can now:
 ✅ Project ${projectName} created successfully with OAuth 2.1 (without dependencies)!
 
 Next steps:
-1. cd ${projectName}
+${isCurrentDir ? `1. Copy .env.example to .env
+2. Configure your OAuth provider settings in .env
+3. Run 'npm install' to install dependencies
+4. Run 'npm run build' to build the project
+5. See docs/OAUTH.md for OAuth setup guides` : `1. cd ${projectName}
 2. Copy .env.example to .env
 3. Configure your OAuth provider settings in .env
 4. Run 'npm install' to install dependencies
 5. Run 'npm run build' to build the project
-6. See docs/OAUTH.md for OAuth setup guides
+6. See docs/OAUTH.md for OAuth setup guides`}
 
 🛠️  Add more tools:
    mcp add tool <tool-name>
@@ -411,13 +451,18 @@ Next steps:
       } else {
         console.log(`
 Project ${projectName} created successfully (without dependencies)!
-
+${isCurrentDir ? `
+Next steps:
+1. Run 'npm install' to install dependencies
+2. Run 'npm run build' to build the project
+3. Add more tools using:
+   mcp add tool <n>` : `
 You can now:
 1. cd ${projectName}
 2. Run 'npm install' to install dependencies
 3. Run 'npm run build' to build the project
 4. Add more tools using:
-   mcp add tool <n>
+   mcp add tool <n>`}
     `);
       }
     }
