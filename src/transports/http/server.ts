@@ -22,6 +22,7 @@ export class HttpStreamTransport extends AbstractTransport {
   private _enableJsonResponse: boolean = false;
   private _config: HttpStreamTransportConfig;
   private _oauthMetadata?: ProtectedResourceMetadata;
+  private _healthPath: string | null;
 
   private _transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
 
@@ -32,6 +33,10 @@ export class HttpStreamTransport extends AbstractTransport {
     this._port = config.port || 8080;
     this._endpoint = config.endpoint || '/mcp';
     this._enableJsonResponse = config.responseMode === 'batch';
+
+    // Health endpoint: enabled by default at /health
+    const healthEnabled = config.health?.enabled !== false;
+    this._healthPath = healthEnabled ? (config.health?.path || '/health') : null;
 
     // Initialize OAuth metadata if OAuth provider is configured
     this._oauthMetadata = initializeOAuthMetadata(this._config.auth, 'HTTP Stream');
@@ -81,6 +86,12 @@ export class HttpStreamTransport extends AbstractTransport {
             } else {
               res.writeHead(404).end('Not Found');
             }
+            return;
+          }
+
+          if (req.method === 'GET' && this._healthPath && url.pathname === this._healthPath) {
+            const body = JSON.stringify(this._config.health?.response ?? { ok: true });
+            res.writeHead(200, { 'Content-Type': 'application/json' }).end(body);
             return;
           }
 

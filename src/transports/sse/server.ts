@@ -3,7 +3,7 @@ import { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { SSEServerTransport as SDKSSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { Server as SDKServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { AbstractTransport } from "../base.js";
-import { DEFAULT_SSE_CONFIG, SSETransportConfig, SSETransportConfigInternal, DEFAULT_CORS_CONFIG, CORSConfig } from "./types.js";
+import { DEFAULT_SSE_CONFIG, SSETransportConfig, SSETransportConfigInternal, DEFAULT_CORS_CONFIG, CORSConfig, HealthConfig } from "./types.js";
 import { logger } from "../../core/Logger.js";
 import { setResponseHeaders } from "../../utils/headers.js";
 import { ProtectedResourceMetadata } from "../../auth/metadata/protected-resource.js";
@@ -34,6 +34,7 @@ export class SSEServerTransport extends AbstractTransport {
   private _corsHeaders: Record<string, string>
   private _corsHeadersWithMaxAge: Record<string, string>
   private _serverFactory?: SDKServerFactory
+  private _healthPath: string | null
 
   constructor(config: SSETransportConfig = {}) {
     super()
@@ -41,6 +42,10 @@ export class SSEServerTransport extends AbstractTransport {
       ...DEFAULT_SSE_CONFIG,
       ...config
     }
+
+    // Health endpoint: enabled by default at /health
+    const healthEnabled = config.health?.enabled !== false;
+    this._healthPath = healthEnabled ? (config.health?.path || '/health') : null;
 
     // Initialize OAuth metadata if OAuth provider is configured
     this._oauthMetadata = initializeOAuthMetadata(this._config.auth, 'SSE');
@@ -146,6 +151,12 @@ export class SSEServerTransport extends AbstractTransport {
       } else {
         res.writeHead(404).end("Not Found");
       }
+      return;
+    }
+
+    if (req.method === "GET" && this._healthPath && url.pathname === this._healthPath) {
+      const body = JSON.stringify(this._config.health?.response ?? { ok: true });
+      res.writeHead(200, { "Content-Type": "application/json" }).end(body);
       return;
     }
 

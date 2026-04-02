@@ -27,7 +27,7 @@ export type {
   AppToolVisibility,
 } from './apps/types.js';
 
-export type { SSETransportConfig } from './transports/sse/types.js';
+export type { SSETransportConfig, HealthConfig } from './transports/sse/types.js';
 export type { HttpStreamTransportConfig } from './transports/http/types.js';
 export { HttpStreamTransport } from './transports/http/server.js';
 

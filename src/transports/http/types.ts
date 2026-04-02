@@ -5,7 +5,7 @@ import {
   RequestId,
 } from '@modelcontextprotocol/sdk/types.js';
 import { AuthConfig } from '../../auth/types.js';
-import { CORSConfig } from '../sse/types.js';
+import { CORSConfig, HealthConfig } from '../sse/types.js';
 
 export { JSONRPCRequest, JSONRPCResponse, JSONRPCMessage, RequestId };
 
@@ -100,6 +100,12 @@ export interface HttpStreamTransportConfig {
    * CORS configuration
    */
   cors?: CORSConfig;
+
+  /**
+   * Health endpoint configuration.
+   * Enabled by default at /health when using HTTP Stream transport.
+   */
+  health?: HealthConfig;
 }
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
