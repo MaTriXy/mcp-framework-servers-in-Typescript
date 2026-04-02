@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.20](https://github.com/QuantGeekDev/mcp-framework/compare/mcp-framework-v0.2.19...mcp-framework-v0.2.20) (2026-04-02)
+
+
+### Features
+
+* add elicitation support and upgrade SDK to 1.29.0 ([652694d](https://github.com/QuantGeekDev/mcp-framework/commit/652694df11aad221e32e151793d04769c47dc64d))
+* add Lambda/serverless support (handleRequest + createLambdaHandler) ([d3e0459](https://github.com/QuantGeekDev/mcp-framework/commit/d3e0459f46de5d9967f97a7fa3f92ec321e1ba33))
+* add Lambda/serverless support with handleRequest() and createLambdaHandler() ([bec59ab](https://github.com/QuantGeekDev/mcp-framework/commit/bec59ab2f4157f0983d8edf95c86ed2eec235ef7))
+* add MCP Apps support (interactive UI from tools) ([277b511](https://github.com/QuantGeekDev/mcp-framework/commit/277b51143f8e5e811218d6182cae82fcaafd049e))
+* add MCP Apps support (interactive UI from tools) ([571b365](https://github.com/QuantGeekDev/mcp-framework/commit/571b36584a8a7f851a60518885ef784b098b0087))
+* add multi-transport support for concurrent stdio/SSE/HTTP Stream ([#124](https://github.com/QuantGeekDev/mcp-framework/issues/124)) ([b7da217](https://github.com/QuantGeekDev/mcp-framework/commit/b7da217d263e7b6e36bfbb4c37495246d80fab72))
+* add React support for MCP Apps ([a385629](https://github.com/QuantGeekDev/mcp-framework/commit/a385629f7f4c625812209b7ffb5cd17a4f53baf2))
+* add React support for MCP Apps ([4ea299f](https://github.com/QuantGeekDev/mcp-framework/commit/4ea299ff71fdf9c979756ce7a95ca8b887a9a6f2))
+* implement MCP 2025-11-25 spec compliance (18 tickets) ([91c2233](https://github.com/QuantGeekDev/mcp-framework/commit/91c22332d1bd4e3e91d0edcacc7a614b15800f25))
+* multi-transport support for concurrent stdio/SSE/HTTP Stream ([d6353a6](https://github.com/QuantGeekDev/mcp-framework/commit/d6353a64e0f825166270d82267d00dfbb06b07e3))
+* rename CLI to create-docs-mcp and publish @mcpframework/docs ([9ddd03f](https://github.com/QuantGeekDev/mcp-framework/commit/9ddd03f3d6b521fec8800221276ca8a532bc6698))
+
+
+### Bug Fixes
+
+* add Bearer header and query param fallbacks for API key auth ([8002267](https://github.com/QuantGeekDev/mcp-framework/commit/8002267822952354d674e8f4557fa5b88e21dac6)), closes [#80](https://github.com/QuantGeekDev/mcp-framework/issues/80)
+* API key auth fallbacks for SSE clients without custom headers ([298799f](https://github.com/QuantGeekDev/mcp-framework/commit/298799f517c227de406275d56f081c6b8af4ef6e))
+* handle ZodNullable and ZodDefault in legacy schema optionality check ([5fcd54d](https://github.com/QuantGeekDev/mcp-framework/commit/5fcd54d167f28f5c4438d3367b17c9e138076e75)), closes [#118](https://github.com/QuantGeekDev/mcp-framework/issues/118)
+* improve basePath resolution for npx execution support ([bff2347](https://github.com/QuantGeekDev/mcp-framework/commit/bff23471567c403ace2f09a6df4c6b71153d3001))
+* improve basePath resolution for npx execution support ([6402c82](https://github.com/QuantGeekDev/mcp-framework/commit/6402c82914260777407cdc1a2d2a5536c652e427))
+* optional fields marked as required in legacy schema format ([ab70a36](https://github.com/QuantGeekDev/mcp-framework/commit/ab70a36891e41404f5f6dbef8b2f08891fbbb3b9))
+* refactor SSE transport to use per-session SDK server instances ([2396a34](https://github.com/QuantGeekDev/mcp-framework/commit/2396a34407907c779098e1dfe04651b254aa440f)), closes [#90](https://github.com/QuantGeekDev/mcp-framework/issues/90)
+* remove duplicate OAuth section and fix naming inconsistencies in README ([352152d](https://github.com/QuantGeekDev/mcp-framework/commit/352152dbe3debf4f3ed3b825551743230686361c))
+* remove duplicate OAuth section and fix naming inconsistencies in README ([83923bf](https://github.com/QuantGeekDev/mcp-framework/commit/83923bf53668e7a2e3c661cfa8c4b2c235a8ea79))
+* SSE transport per-session isolation (n8n compat) ([67494c1](https://github.com/QuantGeekDev/mcp-framework/commit/67494c15798d9d15bab159c6907edf0875ed663e))
+
 ## [0.2.19](https://github.com/QuantGeekDev/mcp-framework/compare/mcp-framework-v0.2.18...mcp-framework-v0.2.19) (2026-04-01)
 
 
