@@ -1,5 +1,6 @@
 import { createRequire } from 'module';
 import { spawnSync } from 'child_process';
+import { existsSync } from 'fs';
 import { mkdir, readdir, writeFile } from 'fs/promises';
 import { basename, join } from 'path';
 import prompts from 'prompts';
@@ -350,14 +351,16 @@ OAUTH_ISSUER=https://auth.example.com
 
     process.chdir(projectDir);
 
-    console.log('Initializing git repository...');
-    const gitInit = spawnSync('git', ['init'], {
-      stdio: 'inherit',
-      shell: true,
-    });
+    if (!isCurrentDir || !existsSync(join(projectDir, '.git'))) {
+      console.log('Initializing git repository...');
+      const gitInit = spawnSync('git', ['init'], {
+        stdio: 'inherit',
+        shell: true,
+      });
 
-    if (gitInit.status !== 0) {
-      throw new Error('Failed to initialize git repository');
+      if (gitInit.status !== 0) {
+        throw new Error('Failed to initialize git repository');
+      }
     }
 
     if (shouldInstall) {
