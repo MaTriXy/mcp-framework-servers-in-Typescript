@@ -41,6 +41,21 @@ import { HttpStreamTransportConfig, DEFAULT_HTTP_STREAM_CONFIG } from '../transp
 import { DEFAULT_CORS_CONFIG } from '../transports/sse/types.js';
 import { AuthConfig } from '../auth/types.js';
 import { createRequire } from 'module';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { authenticateWebRequest } from '../serverless/web-auth-handler.js';
+import { initializeOAuthMetadata } from '../transports/utils/oauth-metadata.js';
+import { requestContext } from '../utils/requestContext.js';
+import type {
+  LambdaEvent,
+  LambdaResult,
+  LambdaContext,
+  LambdaHandlerConfig,
+} from '../serverless/types.js';
+import {
+  lambdaEventToRequest,
+  responseToLambdaResult,
+  getSourceIp,
+} from '../serverless/lambda-adapter.js';
 
 const require = createRequire(import.meta.url);
 
@@ -74,6 +89,9 @@ export interface MCPServerConfig {
   /** Array of transport configs for running multiple transports concurrently.
    *  Cannot be used together with `transport`. */
   transports?: TransportConfig[];
+  /** Top-level auth config. Used by handleRequest() and createLambdaHandler().
+   *  Also used by start() if transport.auth is not set. */
+  auth?: AuthConfig;
   logging?: boolean;
   tasks?: TasksConfig;
   /** When true, app HTML content is re-read from disk on every resources/read.
@@ -86,6 +104,11 @@ export interface TransportBinding {
   transport: BaseTransport;
   sdkServer: Server;
   label: string;
+}
+
+export interface HandleRequestOptions {
+  /** Source IP address of the client (e.g., from Lambda event). */
+  sourceIp?: string;
 }
 
 export type ServerCapabilities = {
@@ -139,6 +162,9 @@ export class MCPServer {
   private _tasksConfig?: TasksConfig;
   private _taskManager?: TaskManager;
   private _devMode: boolean;
+  private _initialized = false;
+  private _initPromise?: Promise<void>;
+  private _authConfig?: AuthConfig;
 
   /** Returns the first binding's SDK Server, or undefined if no bindings exist. */
   private get server(): Server | undefined {
@@ -152,6 +178,7 @@ export class MCPServer {
     this._loggingEnabled = config.logging ?? false;
     this._tasksConfig = config.tasks;
     this._devMode = config.devMode ?? !!process.env.MCP_DEV_MODE;
+    this._authConfig = config.auth;
 
     // Normalize transport config: support both singular and plural forms
     if (config.transport && config.transports) {
@@ -253,7 +280,8 @@ export class MCPServer {
 
   /**
    * Creates a new SDK Server instance configured with all registered handlers.
-   * Used by SSE transport to create isolated per-session servers.
+   * Used by handleRequest() to create isolated per-request servers, and by
+   * SSE transport for per-session servers.
    */
   private createSDKServerForSession(): Server {
     const serverOptions: Record<string, unknown> = { capabilities: this.capabilities };
@@ -716,17 +744,17 @@ export class MCPServer {
   }
 
   private async detectCapabilities(): Promise<ServerCapabilities> {
-    if (await this.toolLoader.hasTools()) {
+    if (this.toolsMap.size > 0 || await this.toolLoader.hasTools()) {
       this.capabilities.tools = {};
       logger.debug('Tools capability enabled');
     }
 
-    if (await this.promptLoader.hasPrompts()) {
+    if (this.promptsMap.size > 0 || await this.promptLoader.hasPrompts()) {
       this.capabilities.prompts = {};
       logger.debug('Prompts capability enabled');
     }
 
-    if (await this.resourceLoader.hasResources()) {
+    if (this.resourcesMap.size > 0 || await this.resourceLoader.hasResources()) {
       this.capabilities.resources = {};
       logger.debug('Resources capability enabled');
     }
@@ -921,6 +949,348 @@ export class MCPServer {
     } as ResourceProtocol;
   }
 
+  // ── Lazy initialization ───────────────────────────────────────────────
+
+  /**
+   * Idempotent initialization: loads tools, prompts, resources, apps from
+   * disk, validates them, detects capabilities, and caches app content.
+   * Safe to call multiple times — only runs once.
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (this._initialized) return;
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = this._doInitialize();
+    await this._initPromise;
+  }
+
+  private async _doInitialize(): Promise<void> {
+    // Preserve any tools/prompts/resources registered programmatically
+    const preRegisteredTools = new Map(this.toolsMap);
+    const preRegisteredPrompts = new Map(this.promptsMap);
+    const preRegisteredResources = new Map(this.resourcesMap);
+
+    const tools = await this.toolLoader.loadTools();
+    this.toolsMap = new Map(tools.map((tool: ToolProtocol) => [tool.name, tool]));
+
+    for (const tool of tools) {
+      if ('validate' in tool && typeof tool.validate === 'function') {
+        try {
+          (tool as any).validate();
+        } catch (error: any) {
+          logger.error(`Tool validation failed for '${tool.name}': ${error.message}`);
+          throw new Error(`Tool validation failed for '${tool.name}': ${error.message}`);
+        }
+      }
+    }
+
+    const prompts = await this.promptLoader.loadPrompts();
+    this.promptsMap = new Map(prompts.map((prompt: PromptProtocol) => [prompt.name, prompt]));
+
+    const resources = await this.resourceLoader.loadResources();
+    this.resourcesMap = new Map(
+      resources.map((resource: ResourceProtocol) => [resource.uri, resource])
+    );
+
+    // Load standalone apps (Mode A)
+    const apps = await this.appLoader.loadApps();
+    for (const app of apps) {
+      try {
+        app.validate();
+        this.appsMap.set(app.name, app);
+
+        for (const toolDef of app.tools) {
+          const syntheticTool = this.createAppTool(app, toolDef);
+          this.toolsMap.set(toolDef.name, syntheticTool);
+        }
+
+        const syntheticResource = this.createAppResource(app);
+        this.resourcesMap.set(app.ui.resourceUri, syntheticResource);
+
+        logger.debug(`Registered app: ${app.name} with ${app.tools.length} tool(s)`);
+      } catch (error: any) {
+        logger.error(`App validation failed for "${app.name}": ${error.message}`);
+        throw new Error(`App validation failed for "${app.name}": ${error.message}`);
+      }
+    }
+
+    // Register tool-attached app resources (Mode B)
+    for (const tool of tools) {
+      if ((tool as any).hasApp) {
+        const appDef = (tool as any).appResourceDefinition;
+        if (appDef && !this.resourcesMap.has(appDef.uri)) {
+          const resource = this.createToolAppResource(tool as any);
+          this.resourcesMap.set(appDef.uri, resource);
+        }
+      }
+    }
+
+    this._hasApps = this.appsMap.size > 0 || tools.some((t: any) => t.hasApp);
+
+    // Cache app HTML content in production mode
+    if (this._hasApps && !this._devMode) {
+      for (const app of this.appsMap.values()) {
+        try {
+          const html = await app.getContent();
+          warnContentSize(html, app.name);
+          this.appContentCache.set(app.ui.resourceUri, html);
+          logger.debug(
+            `Cached app content: ${app.name} (${Buffer.byteLength(html)} bytes)`,
+          );
+        } catch (error: any) {
+          logger.error(`Failed to load content for app "${app.name}": ${error.message}`);
+          throw new Error(
+            `Failed to load content for app "${app.name}": ${error.message}`,
+          );
+        }
+      }
+      for (const tool of tools) {
+        if ((tool as any).hasApp) {
+          const uri = (tool as any).appResourceDefinition?.uri;
+          if (uri && !this.appContentCache.has(uri)) {
+            try {
+              const html = await (tool as any).readAppContent();
+              this.appContentCache.set(uri, html);
+            } catch (error: any) {
+              logger.error(
+                `Failed to load app content for tool "${tool.name}": ${error.message}`,
+              );
+              throw new Error(
+                `Failed to load app content for tool "${tool.name}": ${error.message}`,
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // Merge back programmatically registered items (they take precedence)
+    for (const [name, tool] of preRegisteredTools) {
+      this.toolsMap.set(name, tool);
+    }
+    for (const [name, prompt] of preRegisteredPrompts) {
+      this.promptsMap.set(name, prompt);
+    }
+    for (const [uri, resource] of preRegisteredResources) {
+      this.resourcesMap.set(uri, resource);
+    }
+
+    await this.detectCapabilities();
+    logger.info(`Capabilities detected: ${JSON.stringify(this.capabilities)}`);
+
+    this._initialized = true;
+  }
+
+  // ── Programmatic registration ────────────────────────────────────────
+
+  /**
+   * Register a tool class programmatically. Must be called before
+   * start() or the first handleRequest() call.
+   */
+  addTool(ToolClass: new () => ToolProtocol): void {
+    if (this._initialized) {
+      throw new Error('Cannot add tools after initialization. Call addTool() before start() or handleRequest().');
+    }
+    const tool = new ToolClass();
+    if ('validate' in tool && typeof tool.validate === 'function') {
+      (tool as any).validate();
+    }
+    this.toolsMap.set(tool.name, tool);
+  }
+
+  /**
+   * Register a prompt class programmatically. Must be called before
+   * start() or the first handleRequest() call.
+   */
+  addPrompt(PromptClass: new () => PromptProtocol): void {
+    if (this._initialized) {
+      throw new Error('Cannot add prompts after initialization. Call addPrompt() before start() or handleRequest().');
+    }
+    const prompt = new PromptClass();
+    this.promptsMap.set(prompt.name, prompt);
+  }
+
+  /**
+   * Register a resource class programmatically. Must be called before
+   * start() or the first handleRequest() call.
+   */
+  addResource(ResourceClass: new () => ResourceProtocol): void {
+    if (this._initialized) {
+      throw new Error('Cannot add resources after initialization. Call addResource() before start() or handleRequest().');
+    }
+    const resource = new ResourceClass();
+    this.resourcesMap.set(resource.uri, resource);
+  }
+
+  // ── Serverless request handling ──────────────────────────────────────
+
+  /**
+   * Handle a single Web Standard Request and return a Response.
+   * Designed for serverless environments (Lambda, Cloudflare Workers, etc.)
+   * where each request is independent and stateless.
+   *
+   * Creates a fresh transport and SDK server per request.
+   * Tools, prompts, and resources are loaded once and cached.
+   */
+  async handleRequest(
+    request: Request,
+    options?: HandleRequestOptions,
+  ): Promise<Response> {
+    await this.ensureInitialized();
+
+    const url = new URL(request.url);
+    const authConfig = this._authConfig ?? this.transportConfigs[0]?.auth;
+
+    // CORS preflight
+    if (request.method === 'OPTIONS') {
+      return this._createCorsPreflightResponse();
+    }
+
+    // OAuth metadata endpoint
+    if (request.method === 'GET' && url.pathname === '/.well-known/oauth-protected-resource') {
+      return this._addCorsHeaders(this._handleOAuthMetadataRequest(authConfig));
+    }
+
+    // Authenticate
+    const authOutcome = await authenticateWebRequest(
+      request,
+      authConfig,
+      request.method === 'POST' ? 'message' : 'request',
+      options?.sourceIp,
+    );
+    if ('response' in authOutcome) {
+      return this._addCorsHeaders(authOutcome.response);
+    }
+    const authData = (authOutcome.result.data as Record<string, unknown>) ?? {};
+
+    // Per-request stateless transport
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined, // stateless mode
+      enableJsonResponse: true,      // JSON batch mode (no SSE)
+    });
+
+    // Per-request SDK Server with all handlers
+    const sdkServer = this.createSDKServerForSession();
+
+    // Inject server into tools for this request
+    for (const tool of this.toolsMap.values()) {
+      tool.injectServer(sdkServer);
+    }
+
+    // Connect (wires onmessage/onclose/onerror, calls transport.start() which is no-op)
+    await sdkServer.connect(transport);
+
+    let response: Response;
+    try {
+      response = await requestContext.run(authData, async () => {
+        return transport.handleRequest(request);
+      });
+    } finally {
+      try { await transport.close(); } catch { /* ignore */ }
+      try { await sdkServer.close(); } catch { /* ignore */ }
+    }
+
+    return this._addCorsHeaders(response);
+  }
+
+  /**
+   * Create an AWS Lambda handler function. The returned function can be
+   * exported directly as a Lambda handler.
+   *
+   * @example
+   * ```typescript
+   * const server = new MCPServer({ name: 'my-mcp', version: '1.0.0' });
+   * export const handler = server.createLambdaHandler();
+   * ```
+   */
+  createLambdaHandler(
+    config?: LambdaHandlerConfig,
+  ): (event: LambdaEvent, context: LambdaContext) => Promise<LambdaResult> {
+    return async (event: LambdaEvent, _context: LambdaContext): Promise<LambdaResult> => {
+      try {
+        const request = lambdaEventToRequest(event, config?.basePath);
+        const sourceIp = getSourceIp(event);
+
+        const response = await this.handleRequest(request, { sourceIp });
+
+        const result = await responseToLambdaResult(response, event);
+
+        // Apply CORS overrides if configured
+        if (config?.cors !== false) {
+          const cors = config?.cors ?? {};
+          result.headers['access-control-allow-origin'] =
+            cors.allowOrigin ?? result.headers['access-control-allow-origin'] ?? '*';
+          result.headers['access-control-allow-methods'] =
+            cors.allowMethods ?? result.headers['access-control-allow-methods'] ?? 'GET, POST, DELETE, OPTIONS';
+          result.headers['access-control-allow-headers'] =
+            cors.allowHeaders ?? result.headers['access-control-allow-headers'] ?? 'Content-Type, mcp-session-id, Accept, Authorization, X-API-Key';
+        }
+
+        return result;
+      } catch (error: any) {
+        logger.error(`Lambda handler error: ${error.message}\n${error.stack}`);
+
+        return {
+          statusCode: 500,
+          headers: {
+            'content-type': 'application/json',
+            'access-control-allow-origin': '*',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: 'Internal server error',
+            },
+            id: null,
+          }),
+          isBase64Encoded: false,
+        };
+      }
+    };
+  }
+
+  private _createCorsPreflightResponse(): Response {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id, Accept, Authorization, X-API-Key',
+        'Access-Control-Expose-Headers': 'mcp-session-id',
+        'Access-Control-Max-Age': '86400',
+      },
+    });
+  }
+
+  private _addCorsHeaders(response: Response): Response {
+    const newHeaders = new Headers(response.headers);
+    if (!newHeaders.has('Access-Control-Allow-Origin')) {
+      newHeaders.set('Access-Control-Allow-Origin', '*');
+      newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, mcp-session-id, Accept, Authorization, X-API-Key');
+      newHeaders.set('Access-Control-Expose-Headers', 'mcp-session-id');
+    }
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+  }
+
+  private _handleOAuthMetadataRequest(authConfig?: AuthConfig): Response {
+    const metadata = initializeOAuthMetadata(authConfig, 'serverless');
+    if (metadata) {
+      return new Response(metadata.toJSON(), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=3600',
+        },
+      });
+    }
+    return new Response('Not Found', { status: 404 });
+  }
+
   async start() {
     try {
       if (this.isRunning) {
@@ -933,105 +1303,7 @@ export class MCPServer {
       const sdkVersion = this.getSdkVersion();
       logger.info(`Starting MCP server: (Framework: ${frameworkVersion}, SDK: ${sdkVersion})...`);
 
-      const tools = await this.toolLoader.loadTools();
-      this.toolsMap = new Map(tools.map((tool: ToolProtocol) => [tool.name, tool]));
-
-      for (const tool of tools) {
-        if ('validate' in tool && typeof tool.validate === 'function') {
-          try {
-            (tool as any).validate();
-          } catch (error: any) {
-            logger.error(`Tool validation failed for '${tool.name}': ${error.message}`);
-            throw new Error(`Tool validation failed for '${tool.name}': ${error.message}`);
-          }
-        }
-      }
-
-      const prompts = await this.promptLoader.loadPrompts();
-      this.promptsMap = new Map(prompts.map((prompt: PromptProtocol) => [prompt.name, prompt]));
-
-      const resources = await this.resourceLoader.loadResources();
-      this.resourcesMap = new Map(
-        resources.map((resource: ResourceProtocol) => [resource.uri, resource])
-      );
-
-      // Load standalone apps (Mode A)
-      const apps = await this.appLoader.loadApps();
-      for (const app of apps) {
-        try {
-          app.validate();
-          this.appsMap.set(app.name, app);
-
-          // Register each app's tools
-          for (const toolDef of app.tools) {
-            const syntheticTool = this.createAppTool(app, toolDef);
-            this.toolsMap.set(toolDef.name, syntheticTool);
-          }
-
-          // Register the UI resource
-          const syntheticResource = this.createAppResource(app);
-          this.resourcesMap.set(app.ui.resourceUri, syntheticResource);
-
-          logger.debug(`Registered app: ${app.name} with ${app.tools.length} tool(s)`);
-        } catch (error: any) {
-          logger.error(`App validation failed for "${app.name}": ${error.message}`);
-          throw new Error(`App validation failed for "${app.name}": ${error.message}`);
-        }
-      }
-
-      // Register tool-attached app resources (Mode B)
-      for (const tool of tools) {
-        if ((tool as any).hasApp) {
-          const appDef = (tool as any).appResourceDefinition;
-          if (appDef && !this.resourcesMap.has(appDef.uri)) {
-            const resource = this.createToolAppResource(tool as any);
-            this.resourcesMap.set(appDef.uri, resource);
-          }
-        }
-      }
-
-      this._hasApps = this.appsMap.size > 0 || tools.some((t: any) => t.hasApp);
-
-      // Cache app HTML content in production mode
-      if (this._hasApps && !this._devMode) {
-        for (const app of this.appsMap.values()) {
-          try {
-            const html = await app.getContent();
-            warnContentSize(html, app.name);
-            this.appContentCache.set(app.ui.resourceUri, html);
-            logger.debug(
-              `Cached app content: ${app.name} (${Buffer.byteLength(html)} bytes)`,
-            );
-          } catch (error: any) {
-            logger.error(`Failed to load content for app "${app.name}": ${error.message}`);
-            throw new Error(
-              `Failed to load content for app "${app.name}": ${error.message}`,
-            );
-          }
-        }
-        // Cache tool-attached app content too
-        for (const tool of tools) {
-          if ((tool as any).hasApp) {
-            const uri = (tool as any).appResourceDefinition?.uri;
-            if (uri && !this.appContentCache.has(uri)) {
-              try {
-                const html = await (tool as any).readAppContent();
-                this.appContentCache.set(uri, html);
-              } catch (error: any) {
-                logger.error(
-                  `Failed to load app content for tool "${tool.name}": ${error.message}`,
-                );
-                throw new Error(
-                  `Failed to load app content for tool "${tool.name}": ${error.message}`,
-                );
-              }
-            }
-          }
-        }
-      }
-
-      await this.detectCapabilities();
-      logger.info(`Capabilities detected: ${JSON.stringify(this.capabilities)}`);
+      await this.ensureInitialized();
 
       const serverOptions: Record<string, unknown> = { capabilities: this.capabilities };
       if (this._hasApps) {
