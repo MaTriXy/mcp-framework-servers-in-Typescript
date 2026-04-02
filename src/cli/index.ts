@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createRequire } from 'module';
+import { execSync } from 'child_process';
 import { Command } from 'commander';
 import { createProject } from './project/create.js';
 import { addTool } from './project/add-tool.js';
@@ -8,6 +9,31 @@ import { addResource } from './project/add-resource.js';
 import { addApp } from './project/add-app.js';
 import { buildFramework } from './framework/build.js';
 import { validateCommand } from './commands/validate.js';
+
+function checkForMcpConflict(): void {
+  try {
+    const isWindows = process.platform === 'win32';
+    const cmd = isWindows ? 'where mcp' : 'which -a mcp';
+    const result = execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const paths = result.trim().split(/\r?\n/).filter(Boolean);
+    if (paths.length > 1) {
+      console.warn(
+        '\x1b[33m⚠ Warning: Multiple "mcp" executables found on your PATH:\x1b[0m'
+      );
+      for (const p of paths) {
+        console.warn(`  - ${p}`);
+      }
+      console.warn(
+        '\x1b[33mIf you experience unexpected behavior (e.g., from a Python mcp package),\n' +
+          'use \x1b[1mmcp-framework\x1b[0m\x1b[33m instead. For example: mcp-framework create my-project\x1b[0m\n'
+      );
+    }
+  } catch {
+    // Silently ignore — `which`/`where` may not be available
+  }
+}
+
+checkForMcpConflict();
 
 const require = createRequire(import.meta.url);
 const frameworkPackageJson = require('../../package.json');
