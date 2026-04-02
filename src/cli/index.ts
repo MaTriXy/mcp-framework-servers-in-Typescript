@@ -47,7 +47,7 @@ program.command('build').description('Build the MCP project').action(buildFramew
 program
   .command('create')
   .description('Create a new MCP server project')
-  .argument('[name]', 'project name')
+  .argument('[name]', 'project name (use "." for current directory)')
   .option('--http', 'use HTTP transport instead of default stdio')
   .option('--cors', 'enable CORS with wildcard (*) access')
   .option('--port <number>', 'specify HTTP port (only valid with --http)', (val) =>
