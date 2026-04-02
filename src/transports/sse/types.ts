@@ -1,6 +1,29 @@
 import { AuthConfig } from "../../auth/types.js";
 
 /**
+ * Health endpoint configuration
+ */
+export interface HealthConfig {
+  /**
+   * Whether the health endpoint is enabled
+   * @default true
+   */
+  enabled?: boolean;
+
+  /**
+   * Path for the health endpoint
+   * @default "/health"
+   */
+  path?: string;
+
+  /**
+   * Custom response body. When set, this object is returned as JSON.
+   * @default { ok: true }
+   */
+  response?: Record<string, unknown>;
+}
+
+/**
  * CORS configuration options for SSE transport
  */
 export interface CORSConfig {
@@ -92,6 +115,12 @@ export interface SSETransportConfig {
   auth?: AuthConfig;
 
   /**
+   * Health endpoint configuration.
+   * Enabled by default at /health when using SSE transport.
+   */
+  health?: HealthConfig;
+
+  /**
    * OAuth configuration for authorization callbacks
    * This enables OAuth endpoints like /.well-known/oauth-protected-resource
    */
@@ -119,12 +148,13 @@ export interface SSETransportConfig {
 /**
  * Internal configuration type with required fields except headers
  */
-export type SSETransportConfigInternal = Required<Omit<SSETransportConfig, 'headers' | 'auth' | 'cors' | 'oauth' | 'host'>> & {
+export type SSETransportConfigInternal = Required<Omit<SSETransportConfig, 'headers' | 'auth' | 'cors' | 'oauth' | 'host' | 'health'>> & {
   headers?: Record<string, string>;
   auth?: AuthConfig;
   cors?: CORSConfig;
   oauth?: SSETransportConfig['oauth'];
   host?: string;
+  health?: HealthConfig;
 };
 
 /**
