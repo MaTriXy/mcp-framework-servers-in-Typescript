@@ -222,9 +222,17 @@ export class HttpStreamTransport extends AbstractTransport {
   }
 
   private async readRequestBody(req: IncomingMessage): Promise<any> {
+    const maxSize = this._config.maxMessageSize ?? 4 * 1024 * 1024;
     return new Promise((resolve, reject) => {
       let body = '';
+      let size = 0;
       req.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > maxSize) {
+          req.destroy();
+          reject(new Error(`Request body exceeds maximum size of ${maxSize} bytes`));
+          return;
+        }
         body += chunk.toString();
       });
       req.on('end', () => {
