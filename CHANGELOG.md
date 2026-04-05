@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.22](https://github.com/QuantGeekDev/mcp-framework/compare/mcp-framework-v0.2.21...mcp-framework-v0.2.22) (2026-04-05)
+
+
+### Features
+
+* **auth:** add SATP agent trust verification provider ([57c9679](https://github.com/QuantGeekDev/mcp-framework/commit/57c9679ac65d24b52ed96b1e9bec9544b6769a6e))
+* **auth:** add SATP agent trust verification provider ([cc0135b](https://github.com/QuantGeekDev/mcp-framework/commit/cc0135bdacf619402499c714d9d03bdc12fe49fb)), closes [#142](https://github.com/QuantGeekDev/mcp-framework/issues/142)
+* skip git init in existing repos and add unit tests for create . ([879cd8b](https://github.com/QuantGeekDev/mcp-framework/commit/879cd8b4a0918be9b990a2d7720f86358daa9341))
+* support `mcp create .` to scaffold in current directory ([1993394](https://github.com/QuantGeekDev/mcp-framework/commit/199339437ea5dbcaba7bb3df7aa50e0563124e04))
+* support `mcp create .` to scaffold in current directory ([300d89e](https://github.com/QuantGeekDev/mcp-framework/commit/300d89e3054897db93c788c13f3a9af2e8709f72)), closes [#78](https://github.com/QuantGeekDev/mcp-framework/issues/78)
+
+
+### Bug Fixes
+
+* add mcp-framework CLI alias and PATH conflict detection ([b543447](https://github.com/QuantGeekDev/mcp-framework/commit/b543447682e46433fa8ba8d0c86c3f97ab69dc81))
+* add mcp-framework CLI alias and PATH conflict detection ([#53](https://github.com/QuantGeekDev/mcp-framework/issues/53)) ([2c5a1ca](https://github.com/QuantGeekDev/mcp-framework/commit/2c5a1cadbf141879f5ae3b1fd1ce86f4e9441f74))
+* enforce maxMessageSize in readRequestBody ([7665c66](https://github.com/QuantGeekDev/mcp-framework/commit/7665c665eb2789dde7411f816c542431d7d4e7ab))
+* enforce maxMessageSize in readRequestBody ([f97d2bb](https://github.com/QuantGeekDev/mcp-framework/commit/f97d2bb76d6359faf10cd1fc54b4911476b62524))
+
 ## [0.2.21](https://github.com/QuantGeekDev/mcp-framework/compare/mcp-framework-v0.2.20...mcp-framework-v0.2.21) (2026-04-02)
 
 
